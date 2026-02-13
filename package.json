@@ -1,0 +1,27 @@
+{
+  "name": "smart-terminal-mcp",
+  "version": "1.0.1",
+  "description": "MCP PTY server providing AI agents with real interactive terminal access",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "smart-terminal-mcp": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "publish": "npm publish"
+  },
+  "keywords": [
+    "mcp",
+    "terminal",
+    "pty",
+    "ai",
+    "claude"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "node-pty": "^1.1.0",
+    "zod": "^3.25.76"
+  }
+}
