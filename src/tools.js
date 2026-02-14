@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { SUPPORTED_KEYS } from './pty-session.js';
 
 /**
- * Register all 9 MCP tools on the server.
+ * Register all 10 MCP tools on the server.
  * @param {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer} server
  * @param {import('./session-manager.js').SessionManager} manager
  */
@@ -17,9 +17,10 @@ export function registerTools(server, manager) {
       rows: z.number().int().min(5).max(200).default(30).describe('Terminal height in rows'),
       cwd: z.string().optional().describe('Working directory. Defaults to server CWD.'),
       name: z.string().optional().describe('Optional friendly name for this session'),
+      env: z.record(z.string()).optional().describe('Custom environment variables to set for the session (e.g. { "TEST_ENV": "true", "API_KEY": "secret" })'),
     },
-    async ({ shell, cols, rows, cwd, name }) => {
-      const session = await manager.create({ shell, cols, rows, cwd, name });
+    async ({ shell, cols, rows, cwd, name, env }) => {
+      const session = await manager.create({ shell, cols, rows, cwd, name, env });
       const banner = await session.waitForBanner();
       return {
         content: [{
@@ -39,7 +40,7 @@ export function registerTools(server, manager) {
   // --- terminal_exec ---
   server.tool(
     'terminal_exec',
-    'Execute a command in a terminal session. Uses marker-based completion detection. Returns clean output, exit code, and current working directory.',
+    'Execute a command and wait for it to complete (blocking). Returns clean output, exit code, and cwd. Only one command can run at a time per session — throws if session is busy.',
     {
       sessionId: z.string().describe('Session ID from terminal_start'),
       command: z.string().describe('Command to execute'),
@@ -67,7 +68,7 @@ export function registerTools(server, manager) {
   // --- terminal_write ---
   server.tool(
     'terminal_write',
-    'Write raw data to a terminal session. Use for interactive programs (REPLs, prompts, etc). Follow with terminal_read to get output.',
+    'Write raw data to a terminal session (fire-and-forget, no output returned). Use for interactive programs (REPLs, prompts, etc). Must call terminal_read afterwards to get output.',
     {
       sessionId: z.string().describe('Session ID'),
       data: z.string().describe('Data to write. Use \\r for Enter, \\t for Tab.'),
@@ -92,7 +93,7 @@ export function registerTools(server, manager) {
   // --- terminal_read ---
   server.tool(
     'terminal_read',
-    'Read buffered output from a terminal session. Uses idle detection — returns when output stops arriving.',
+    'Read new output from a terminal session. Only captures output arriving after this call — does not return past output. Use terminal_get_history to retrieve earlier output. Returns when output stops arriving (idle detection).',
     {
       sessionId: z.string().describe('Session ID'),
       timeout: z.number().int().min(500).max(300000).default(30000).describe('Hard timeout in ms'),
@@ -106,6 +107,27 @@ export function registerTools(server, manager) {
         content: [{
           type: 'text',
           text: JSON.stringify(result, null, 2),
+        }],
+      };
+    }
+  );
+
+  // --- terminal_get_history ---
+  server.tool(
+    'terminal_get_history',
+    'Retrieve past terminal output without consuming it. Unlike terminal_read, this is non-destructive and returns historical output from a rolling buffer (last ~10,000 lines). Useful for reviewing output that was already read or missed.',
+    {
+      sessionId: z.string().describe('Session ID'),
+      offset: z.number().int().min(0).default(0).describe('Number of lines to skip from the end for pagination. offset=0 returns the most recent lines, offset=200 skips the last 200 lines to page backwards.'),
+      maxLines: z.number().int().min(1).max(10000).default(200).describe('Max lines to return'),
+    },
+    async ({ sessionId, offset, maxLines }) => {
+      const session = manager.get(sessionId);
+      const result = session.getHistory({ offset, limit: maxLines });
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ sessionId, ...result }, null, 2),
         }],
       };
     }

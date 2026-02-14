@@ -7,6 +7,7 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 ## Features
 
 - **Marker-based completion detection** -- 100% reliable command completion via unique markers injected into the shell
+- **Robust command echo removal** -- Pre-command marker ensures clean output, handles shell aliases and expansions correctly
 - **Interactive mode** -- `terminal_write` + `terminal_read` for REPLs, prompts, and interactive programs
 - **Special key support** -- Send Ctrl+C, Tab, arrow keys, etc. without knowing escape codes
 - **Pattern waiting** -- Wait for specific output (e.g. "server listening on port") before continuing
@@ -102,6 +103,7 @@ Start a new interactive terminal session.
 | `rows` | number | 30 | Terminal height |
 | `cwd` | string | server CWD | Working directory |
 | `name` | string | -- | Friendly session name |
+| `env` | object | -- | Custom environment variables (e.g. `{ "NODE_ENV": "test" }`) |
 
 **Returns**: `sessionId`, `shell`, `shellType`, `cwd`, `banner`
 
@@ -139,6 +141,18 @@ Read buffered output with idle detection.
 | `maxLines` | number | 200 | Max output lines |
 
 **Returns**: `output`, `timedOut`
+
+### `terminal_get_history`
+
+Retrieve past terminal output without consuming it. Non-destructive — returns historical output from a rolling buffer (last ~10,000 lines). Useful for reviewing output that was already read or missed.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sessionId` | string | *required* | Session ID |
+| `offset` | number | 0 | Lines to skip from the end (0 = most recent). Use for pagination. |
+| `maxLines` | number | 200 | Max lines to return |
+
+**Returns**: `lines`, `totalLines`, `returnedFrom`, `returnedTo`
 
 ### `terminal_send_key`
 
@@ -218,7 +232,7 @@ terminal_wait({ sessionId, pattern: "listening on port", timeout: 60000 })
 ```
 src/
   index.js            Entry point, server bootstrap, graceful shutdown
-  tools.js            9 MCP tool registrations with Zod schemas
+  tools.js            10 MCP tool registrations with Zod schemas
   pty-session.js      PTY session: marker injection, idle read, buffer mgmt
   session-manager.js  Session lifecycle, TTL cleanup, concurrency limits
   shell-detector.js   Cross-platform shell auto-detection

@@ -5,6 +5,7 @@ import { stripAnsi } from './ansi.js';
 import { getShellType } from './shell-detector.js';
 
 const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB
+const HISTORY_MAX_LINES = 10_000;
 const BANNER_WAIT_MS = 2000;
 const BANNER_IDLE_MS = 500;
 
@@ -60,8 +61,9 @@ export class PtySession {
    * @param {number} opts.rows
    * @param {string} opts.cwd
    * @param {string} [opts.name]
+   * @param {Record<string, string>} [opts.env]
    */
-  constructor({ id, shell, shellArgs, cols, rows, cwd, name }) {
+  constructor({ id, shell, shellArgs, cols, rows, cwd, name, env: customEnv }) {
     this.id = id;
     this.shell = shell;
     this.shellType = getShellType(shell);
@@ -76,11 +78,18 @@ export class PtySession {
 
     /** @type {string} */
     this._buffer = '';
+    /** @type {string[]} Rolling history of cleaned output lines */
+    this._history = [];
+    /** Total lines ever appended (monotonic counter for detecting eviction) */
+    this._historyTotalLines = 0;
+    /** Partial line not yet terminated by newline */
+    this._historyPartial = '';
     /** @type {((data: string) => void)[]} */
     this._dataListeners = [];
 
     const env = {
       ...process.env,
+      ...customEnv,
       GIT_PAGER: 'cat',
       PAGER: 'cat',
       LESS: '-FRX',
@@ -107,6 +116,8 @@ export class PtySession {
       if (this._buffer.length > MAX_BUFFER_BYTES) {
         this._buffer = this._buffer.slice(-MAX_BUFFER_BYTES);
       }
+      // Append cleaned output to rolling history
+      this._appendToHistory(data);
       for (const listener of this._dataListeners) {
         listener(data);
       }
@@ -163,7 +174,8 @@ export class PtySession {
 
     const marker = `__MCP_DONE_${randomUUID().replace(/-/g, '')}__`;
     const cwdMarker = `__MCP_CWD_`;
-    const wrappedCommand = this._wrapCommand(command, marker, cwdMarker);
+    const preMarker = `__MCP_PRE_${randomUUID().replace(/-/g, '')}__`;
+    const wrappedCommand = this._wrapCommand(command, marker, cwdMarker, preMarker);
 
     try {
       this.process.write(wrappedCommand + '\r');
@@ -171,7 +183,7 @@ export class PtySession {
       const raw = await this._waitForMarker(marker, timeout, sendNotification, progressToken);
       const timedOut = !raw.includes(marker);
 
-      const { output, exitCode, cwd } = this._parseOutput(raw, command, marker, cwdMarker);
+      const { output, exitCode, cwd } = this._parseOutput(raw, marker, cwdMarker, preMarker);
       if (cwd) this.cwd = cwd;
 
       return {
@@ -350,16 +362,63 @@ export class PtySession {
     };
   }
 
+  /**
+   * Retrieve past output without consuming it.
+   * @param {object} opts
+   * @param {number} [opts.offset=0] - Lines to skip from the end (for pagination)
+   * @param {number} [opts.limit=200] - Max lines to return
+   * @returns {{ lines: string[], totalLines: number, returnedFrom: number, returnedTo: number }}
+   */
+  getHistory({ offset = 0, limit = 200 } = {}) {
+    const len = this._history.length;
+    const end = Math.max(0, len - offset);
+    const start = Math.max(0, end - limit);
+    const lines = this._history.slice(start, end);
+
+    // Map buffer indices to absolute line numbers
+    const evicted = this._historyTotalLines - len;
+    return {
+      lines,
+      totalLines: this._historyTotalLines,
+      returnedFrom: evicted + start,
+      returnedTo: evicted + end,
+    };
+  }
+
   // --- Private Methods ---
 
-  _wrapCommand(command, marker, cwdMarker) {
+  /**
+   * Append ANSI-stripped lines to the rolling history buffer.
+   */
+  _appendToHistory(rawData) {
+    const clean = stripAnsi(rawData);
+    const parts = clean.split(/\r?\n/);
+
+    // First part completes the previous partial line
+    this._historyPartial += parts[0];
+
+    // Middle parts (if any) are complete lines — flush partial then push each
+    for (let i = 1; i < parts.length; i++) {
+      this._history.push(this._historyPartial);
+      this._historyTotalLines++;
+      this._historyPartial = parts[i];
+    }
+
+    // Evict oldest lines if over capacity
+    const overflow = this._history.length - HISTORY_MAX_LINES;
+    if (overflow > 0) {
+      this._history.splice(0, overflow);
+    }
+  }
+
+  _wrapCommand(command, marker, cwdMarker, preMarker) {
     switch (this.shellType) {
       case 'powershell':
-        return `${command}; Write-Host "${marker}_$LASTEXITCODE__"; Write-Host "${cwdMarker}$(Get-Location)__"`;
+        return `Write-Host "${preMarker}"; ${command}; Write-Host "${marker}_$LASTEXITCODE__"; Write-Host "${cwdMarker}$(Get-Location)__"`;
       case 'cmd':
-        return `${command} & echo ${marker}_%ERRORLEVEL%__ & echo ${cwdMarker}%CD%__`;
+        return `echo ${preMarker} & ${command} & echo ${marker}_%ERRORLEVEL%__ & echo ${cwdMarker}%CD%__`;
       default: // bash/zsh
-        return `${command}; echo "${marker}_$?__"; echo "${cwdMarker}$(pwd)__"`;
+        return `echo "${preMarker}"; ${command}; echo "${marker}_$?__"; echo "${cwdMarker}$(pwd)__"`;
     }
   }
 
@@ -446,19 +505,27 @@ export class PtySession {
   }
 
   /**
-   * Parse raw output: strip echoed command, extract exit code, extract CWD.
+   * Parse raw output: strip echoed command using preMarker, extract exit code, extract CWD.
    */
-  _parseOutput(raw, command, marker, cwdMarker) {
+  _parseOutput(raw, marker, cwdMarker, preMarker) {
     let clean = stripAnsi(raw);
     const lines = clean.split(/\r?\n/);
     const outputLines = [];
     let exitCode = null;
     let cwd = null;
 
-    // The first line(s) may be the echoed command — skip them
-    let echoSkipped = false;
+    // Find preMarker — start capturing output only after we see it
+    let foundPreMarker = false;
 
     for (const line of lines) {
+      // Wait for preMarker before capturing any output
+      if (!foundPreMarker) {
+        if (line.includes(preMarker)) {
+          foundPreMarker = true;
+        }
+        continue;
+      }
+
       // Extract exit code from marker line
       const markerMatch = line.match(new RegExp(`${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_(\\d+)__`));
       if (markerMatch) {
@@ -478,12 +545,6 @@ export class PtySession {
         continue;
       }
 
-      // Skip echoed command (first occurrence)
-      if (!echoSkipped && line.includes(command.slice(0, 40))) {
-        echoSkipped = true;
-        continue;
-      }
-
       outputLines.push(line);
     }
 
@@ -492,14 +553,14 @@ export class PtySession {
   }
 
   /**
-   * Truncate output to maxLines: head(20) + "...omitted..." + tail(20).
+   * Truncate output to maxLines: head(maxLines/2) + "...omitted..." + tail(maxLines/2).
    */
   _truncateOutput(output, maxLines) {
     const lines = output.split('\n');
     if (lines.length <= maxLines) return output;
 
-    const headCount = 20;
-    const tailCount = 20;
+    const headCount = Math.floor(maxLines / 2);
+    const tailCount = Math.ceil(maxLines / 2);
     const head = lines.slice(0, headCount);
     const tail = lines.slice(-tailCount);
     const omitted = lines.length - headCount - tailCount;

@@ -23,9 +23,10 @@ export class SessionManager {
    * @param {number} [opts.rows=30]
    * @param {string} [opts.cwd]
    * @param {string} [opts.name]
+   * @param {Record<string, string>} [opts.env]
    * @returns {Promise<PtySession>}
    */
-  async create({ shell, cols = 120, rows = 30, cwd, name } = {}) {
+  async create({ shell, cols = 120, rows = 30, cwd, name, env } = {}) {
     if (this._sessions.size >= MAX_SESSIONS) {
       throw new Error(`Maximum ${MAX_SESSIONS} concurrent sessions reached. Stop an existing session first.`);
     }
@@ -43,6 +44,7 @@ export class SessionManager {
       rows,
       cwd: cwd || process.cwd(),
       name,
+      env,
     });
 
     this._sessions.set(id, session);
