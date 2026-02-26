@@ -19,8 +19,10 @@ export async function execPipeline(session, { commands, stopOnError = true, maxL
 
   for (const step of commands) {
     // Template substitution: allow referencing previous step's results
+    // Escape output based on shell type to prevent injection
+    const escapedOutput = escapeForShell(session.shellType, prevOutput);
     let cmd = step.command
-      .replace(/\{\{prev_output\}\}/g, prevOutput.replace(/'/g, "'\\''"))
+      .replace(/\{\{prev_output\}\}/g, escapedOutput)
       .replace(/\{\{prev_exitCode\}\}/g, String(prevExitCode));
 
     const result = await session.exec({
@@ -147,17 +149,12 @@ export async function execAndDiff(session, { commandA, commandB, timeout = 30000
  * @returns {Promise<{ sessionId: string, snapshot: object }>}
  */
 export async function captureSnapshot(session) {
-  const envResult = await session.exec({ command: 'env', timeout: 5000, maxLines: 1000 });
-  const cwdResult = await session.exec({ command: 'pwd', timeout: 5000, maxLines: 1 });
+  const { envCommand, cwdCommand, parseEnv } = getSnapshotCommands(session.shellType);
 
-  // Parse env vars
-  const envVars = {};
-  for (const line of envResult.output.split('\n')) {
-    const eq = line.indexOf('=');
-    if (eq > 0) {
-      envVars[line.slice(0, eq)] = line.slice(eq + 1);
-    }
-  }
+  const envResult = await session.exec({ command: envCommand, timeout: 5000, maxLines: 1000 });
+  const cwdResult = await session.exec({ command: cwdCommand, timeout: 5000, maxLines: 1 });
+
+  const envVars = parseEnv(envResult.output);
 
   return {
     sessionId: session.id,
@@ -197,6 +194,13 @@ export async function restoreFromSnapshot(manager, snapshot) {
     'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'PWD', 'OLDPWD',
     'SHLVL', '_', 'LOGNAME', 'HOSTNAME', 'PAGER', 'GIT_PAGER', 'LESS',
     'DEBIAN_FRONTEND',
+    // Windows system vars
+    'COMPUTERNAME', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'SYSTEMROOT',
+    'WINDIR', 'COMSPEC', 'PATHEXT', 'OS', 'PROCESSOR_ARCHITECTURE',
+    'PROCESSOR_IDENTIFIER', 'NUMBER_OF_PROCESSORS', 'TEMP', 'TMP',
+    'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES',
+    'COMMONPROGRAMFILES', 'SYSTEMDRIVE', 'HOMEDRIVE', 'HOMEPATH',
+    'PSModulePath',
   ]);
 
   const customEnvVars = Object.entries(snapshot.envVars || {})
@@ -204,9 +208,9 @@ export async function restoreFromSnapshot(manager, snapshot) {
 
   if (customEnvVars.length > 0) {
     for (const [key, value] of customEnvVars) {
-      const safeValue = value.replace(/'/g, "'\\''");
+      const cmd = buildSetEnvCommand(session.shellType, key, value);
       await session.exec({
-        command: `export ${key}='${safeValue}'`,
+        command: cmd,
         timeout: 3000,
         maxLines: 10,
       });
@@ -285,6 +289,82 @@ function computeDelay(strategy, baseMs, attempt) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Escape a string for safe embedding in a shell command, based on shell type.
+ */
+function escapeForShell(shellType, str) {
+  switch (shellType) {
+    case 'powershell':
+      // PowerShell: use double-quotes, escape internal double-quotes and backticks
+      return str.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
+    case 'cmd':
+      // cmd.exe: escape special chars with ^
+      return str.replace(/([&|<>^"%])/g, '^$1');
+    default:
+      // bash/zsh: escape single quotes
+      return str.replace(/'/g, "'\\''");
+  }
+}
+
+/**
+ * Get shell-specific commands for capturing environment snapshots.
+ */
+function getSnapshotCommands(shellType) {
+  switch (shellType) {
+    case 'powershell':
+      return {
+        envCommand: 'Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }',
+        cwdCommand: '(Get-Location).Path',
+        parseEnv: parseKeyValueEnv,
+      };
+    case 'cmd':
+      return {
+        envCommand: 'set',
+        cwdCommand: 'cd',
+        parseEnv: parseKeyValueEnv,
+      };
+    default:
+      return {
+        envCommand: 'env',
+        cwdCommand: 'pwd',
+        parseEnv: parseKeyValueEnv,
+      };
+  }
+}
+
+/**
+ * Parse KEY=VALUE lines into an object. Works for all shells.
+ */
+function parseKeyValueEnv(output) {
+  const envVars = {};
+  for (const line of output.split('\n')) {
+    const eq = line.indexOf('=');
+    if (eq > 0) {
+      envVars[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    }
+  }
+  return envVars;
+}
+
+/**
+ * Build a shell-specific command to set an environment variable.
+ */
+function buildSetEnvCommand(shellType, key, value) {
+  switch (shellType) {
+    case 'powershell': {
+      const safeValue = value.replace(/'/g, "''");
+      return `$env:${key} = '${safeValue}'`;
+    }
+    case 'cmd': {
+      return `set "${key}=${value}"`;
+    }
+    default: {
+      const safeValue = value.replace(/'/g, "'\\''");
+      return `export ${key}='${safeValue}'`;
+    }
+  }
 }
 
 /**
