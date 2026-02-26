@@ -3,7 +3,7 @@ import { SUPPORTED_KEYS } from './pty-session.js';
 import { execPipeline, execWithRetry, execAndDiff, captureSnapshot, restoreFromSnapshot, execMultiplex } from './smart-tools.js';
 
 /**
- * Register all 9 MCP tools on the server.
+ * Register all MCP tools on the server.
  * @param {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer} server
  * @param {import('./session-manager.js').SessionManager} manager
  */

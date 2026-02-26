@@ -248,7 +248,12 @@ export class PtySession {
       throw new Error(`Session ${this.id} is no longer alive.`);
     }
 
-    const regex = new RegExp(pattern);
+    let regex;
+    try {
+      regex = new RegExp(pattern);
+    } catch (e) {
+      throw new Error(`Invalid regex pattern: ${e.message}`);
+    }
     const startTime = Date.now();
     let collected = '';
     let lastProgressAt = 0;
@@ -410,7 +415,7 @@ export class PtySession {
    */
   _readUntilIdle(timeout, idleTimeout) {
     return new Promise((resolve) => {
-      const startBuffer = this._buffer;
+      let collected = '';
       let idleTimer;
       let resolved = false;
 
@@ -424,9 +429,8 @@ export class PtySession {
       };
 
       const done = () => {
-        const result = this._buffer.slice(startBuffer.length);
         cleanup();
-        resolve(result);
+        resolve(collected);
       };
 
       const hardTimer = setTimeout(done, timeout);
@@ -436,7 +440,8 @@ export class PtySession {
         idleTimer = setTimeout(done, idleTimeout);
       };
 
-      const onData = () => {
+      const onData = (data) => {
+        collected += data;
         resetIdle();
       };
 

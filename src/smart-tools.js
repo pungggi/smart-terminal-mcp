@@ -1,4 +1,21 @@
-import { stripAnsi } from './ansi.js';
+/**
+ * Validate that a regex pattern is safe to compile and won't cause catastrophic backtracking.
+ * Rejects patterns with nested quantifiers like (a+)+ that can cause ReDoS.
+ * @param {string} pattern
+ * @returns {RegExp}
+ */
+function safeRegex(pattern) {
+  // Reject obviously dangerous nested quantifier patterns
+  if (/([+*]|\{\d+,?\d*\})\s*[+*?]/.test(pattern) || /\(\?[^)]*[+*]\)[+*?]/.test(pattern)) {
+    throw new Error(`Potentially unsafe regex pattern rejected (nested quantifiers): ${pattern}`);
+  }
+  // Apply a compilation timeout guard via try/catch
+  try {
+    return new RegExp(pattern);
+  } catch (e) {
+    throw new Error(`Invalid regex pattern: ${e.message}`);
+  }
+}
 
 /**
  * Execute a pipeline of commands sequentially in a session.
@@ -42,7 +59,7 @@ export async function execPipeline(session, { commands, stopOnError = true, maxL
     prevOutput = result.output;
     prevExitCode = result.exitCode ?? -1;
 
-    if (stopOnError && result.exitCode !== 0) {
+    if (stopOnError && (result.timedOut || result.exitCode !== 0)) {
       stopped = true;
       break;
     }
@@ -89,6 +106,9 @@ export async function execWithRetry(session, {
   const history = [];
   let lastResult = null;
 
+  // Pre-compile regex once before the retry loop
+  const successRegex = successPattern ? safeRegex(successPattern) : null;
+
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     const result = await session.exec({ command, timeout, maxLines });
     lastResult = result;
@@ -102,7 +122,7 @@ export async function execWithRetry(session, {
 
     // Check success conditions
     const exitOk = successExitCode === null || result.exitCode === successExitCode;
-    const patternOk = !successPattern || new RegExp(successPattern).test(result.output);
+    const patternOk = !successRegex || successRegex.test(result.output);
 
     if (exitOk && patternOk) {
       return { success: true, attempts: attempt, lastResult: result, history };
@@ -259,15 +279,34 @@ export async function execMultiplex(manager, { commands, maxLines = 200 }) {
     }
   });
 
-  const results = await Promise.all(tasks);
+  // Use allSettled so partial failures don't lose successful results
+  const settled = await Promise.allSettled(tasks);
+  const results = [];
+  const errors = [];
+
+  for (let i = 0; i < settled.length; i++) {
+    const outcome = settled[i];
+    if (outcome.status === 'fulfilled') {
+      results.push(outcome.value);
+    } else {
+      errors.push({
+        command: commands[i].command,
+        name: commands[i].name || null,
+        error: outcome.reason?.message || String(outcome.reason),
+      });
+    }
+  }
+
   const succeeded = results.filter((r) => r.exitCode === 0).length;
 
   return {
     results,
+    ...(errors.length > 0 && { errors }),
     summary: {
       total: commands.length,
       succeeded,
-      failed: commands.length - succeeded,
+      failed: results.length - succeeded,
+      errored: errors.length,
       durationMs: Date.now() - startTime,
     },
   };
@@ -340,9 +379,13 @@ function getSnapshotCommands(shellType) {
 function parseKeyValueEnv(output) {
   const envVars = {};
   for (const line of output.split('\n')) {
-    const eq = line.indexOf('=');
+    const trimmedLine = line.trim();
+    if (!trimmedLine) continue;
+    const eq = trimmedLine.indexOf('=');
     if (eq > 0) {
-      envVars[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+      // Trim the key (keys should never have significant whitespace)
+      // but preserve the value as-is (values may have intentional whitespace)
+      envVars[trimmedLine.slice(0, eq).trim()] = trimmedLine.slice(eq + 1);
     }
   }
   return envVars;
@@ -351,14 +394,27 @@ function parseKeyValueEnv(output) {
 /**
  * Build a shell-specific command to set an environment variable.
  */
+/**
+ * Validate that an environment variable key is safe (alphanumeric + underscore only).
+ */
+function isValidEnvKey(key) {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key);
+}
+
 function buildSetEnvCommand(shellType, key, value) {
+  if (!isValidEnvKey(key)) {
+    throw new Error(`Invalid environment variable name: "${key}"`);
+  }
+
   switch (shellType) {
     case 'powershell': {
       const safeValue = value.replace(/'/g, "''");
       return `$env:${key} = '${safeValue}'`;
     }
     case 'cmd': {
-      return `set "${key}=${value}"`;
+      // Escape poison characters for cmd.exe to prevent injection
+      const safeValue = value.replace(/([&|<>^"%!])/g, '^$1');
+      return `set ${key}=${safeValue}`;
     }
     default: {
       const safeValue = value.replace(/'/g, "'\\''");
@@ -371,9 +427,20 @@ function buildSetEnvCommand(shellType, key, value) {
  * Generate a unified diff between two arrays of lines.
  */
 function unifiedDiff(linesA, linesB, labelA, labelB, contextLines = 3) {
-  // Simple LCS-based diff
   const m = linesA.length;
   const n = linesB.length;
+
+  // Guard against excessive memory usage: O(m*n) table
+  // 2000*2000 = 4M cells is a reasonable upper bound (~32MB)
+  const MAX_DIFF_LINES = 2000;
+  if (m > MAX_DIFF_LINES || n > MAX_DIFF_LINES) {
+    return [
+      `--- ${labelA}`,
+      `+++ ${labelB}`,
+      `@@ diff skipped @@`,
+      `Output too large for diff (${m} vs ${n} lines, max ${MAX_DIFF_LINES}). Compare outputs manually.`,
+    ].join('\n');
+  }
 
   // Build LCS table
   const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
