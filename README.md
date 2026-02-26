@@ -16,6 +16,11 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 - **Anti-blocking** -- Disables pagers (`GIT_PAGER=cat`), progress bars, and sets UTF-8 on Windows
 - **Progress notifications** -- Real-time MCP progress updates during long-running commands
 - **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` or `bash`
+- **Command pipelines** -- Chain multiple commands sequentially with `{{prev_output}}` templating between steps
+- **Smart retry** -- Automatic retries with fixed, linear, or exponential backoff and custom success conditions
+- **Output diffing** -- Execute two commands and get a unified diff of their outputs
+- **Session snapshots** -- Capture and restore full session state (CWD, env vars, shell settings)
+- **Terminal multiplexing** -- Run multiple commands in parallel across auto-managed sessions
 
 ## Requirements
 
@@ -87,7 +92,7 @@ Add to your Cursor MCP settings:
 }
 ```
 
-To pin a specific version, use `smart-terminal-mcp@1.0.1` instead.
+To pin a specific version, use `smart-terminal-mcp@1.1.0` instead.
 
 ## Tools
 
@@ -185,6 +190,81 @@ Stop and clean up a terminal session.
 
 List all active terminal sessions with metadata (ID, name, shell, cwd, idle time, alive/busy status).
 
+### `terminal_pipeline`
+
+Execute a chain of commands sequentially. Each step can reference the previous step's output via `{{prev_output}}` and `{{prev_exitCode}}` template variables.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sessionId` | string | *required* | Session ID |
+| `commands` | array | *required* | Ordered list of `{command, timeout?}` objects (max 20) |
+| `stopOnError` | boolean | true | Stop pipeline on first non-zero exit code |
+| `maxLines` | number | 200 | Max output lines per step |
+
+**Returns**: `steps[]` (per-step results) + `summary` (total, executed, succeeded, failed, stopped)
+
+### `terminal_retry`
+
+Execute a command with automatic retries and configurable backoff strategy.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sessionId` | string | *required* | Session ID |
+| `command` | string | *required* | Command to execute |
+| `maxRetries` | number | 3 | Maximum retry attempts (total attempts = maxRetries + 1) |
+| `backoff` | string | `"exponential"` | `"fixed"`, `"exponential"`, or `"linear"` |
+| `delayMs` | number | 1000 | Base delay between retries in ms |
+| `timeout` | number | 30000 | Timeout per attempt in ms |
+| `successExitCode` | number\|null | 0 | Expected exit code (null = ignore) |
+| `successPattern` | string\|null | null | Regex that must match output for success |
+
+**Returns**: `success`, `attempts`, `lastResult`, `history[]`
+
+### `terminal_diff`
+
+Execute two commands and compare their outputs with a unified diff.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sessionId` | string | *required* | Session ID |
+| `commandA` | string | *required* | First command (baseline) |
+| `commandB` | string | *required* | Second command (comparison) |
+| `timeout` | number | 30000 | Timeout per command in ms |
+| `contextLines` | number | 3 | Context lines in diff output |
+
+**Returns**: `resultA`, `resultB`, `diff` (unified diff string), `identical` (boolean)
+
+### `terminal_snapshot`
+
+Capture a snapshot of a session's state (CWD, environment variables, shell config).
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `sessionId` | string | Session ID to snapshot |
+
+**Returns**: `sessionId`, `snapshot` object (cwd, envVars, shell, cols, rows, name, capturedAt)
+
+### `terminal_restore`
+
+Restore a terminal session from a previously captured snapshot. Creates a new session and applies the saved state.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `snapshot` | object | Snapshot object from `terminal_snapshot` |
+
+**Returns**: `sessionId` (new), `shell`, `cwd`, `restoredFrom`
+
+### `terminal_multiplex`
+
+Execute multiple commands in parallel, each in its own temporary session. Sessions are auto-cleaned up after execution.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `commands` | array | *required* | List of `{command, name?, cwd?, timeout?}` objects (max 8) |
+| `maxLines` | number | 200 | Max output lines per command |
+
+**Returns**: `results[]` (per-command output, exitCode, sessionId) + `summary` (total, succeeded, failed, durationMs)
+
 ## Usage Examples
 
 ### Run a command
@@ -213,14 +293,81 @@ terminal_write({ sessionId, data: "npm run dev\r" })
 terminal_wait({ sessionId, pattern: "listening on port", timeout: 60000 })
 ```
 
+### Build pipeline with dependency chain
+
+```
+terminal_pipeline({
+  sessionId,
+  commands: [
+    { command: "npm install" },
+    { command: "npm run lint" },
+    { command: "npm test" },
+    { command: "npm run build", timeout: 120000 }
+  ],
+  stopOnError: true
+})
+// -> Stops at first failure, returns per-step results + summary
+```
+
+### Retry a flaky network operation
+
+```
+terminal_retry({
+  sessionId,
+  command: "curl -f https://api.example.com/health",
+  maxRetries: 5,
+  backoff: "exponential",
+  delayMs: 2000,
+  successExitCode: 0
+})
+// -> Retries with 2s, 4s, 8s, 16s, 32s delays until success
+```
+
+### Compare outputs before/after a change
+
+```
+terminal_diff({
+  sessionId,
+  commandA: "cat config.old.json",
+  commandB: "cat config.json",
+  contextLines: 3
+})
+// -> Returns unified diff showing exactly what changed
+```
+
+### Snapshot and restore a session
+
+```
+terminal_snapshot({ sessionId })
+// -> { snapshot: { cwd: "/project", envVars: {...}, ... } }
+
+// Later, or in a new conversation:
+terminal_restore({ snapshot: savedSnapshot })
+// -> New session with same CWD, env vars, and shell settings
+```
+
+### Run tests in parallel
+
+```
+terminal_multiplex({
+  commands: [
+    { command: "npm test -- --shard=1/3", name: "shard-1" },
+    { command: "npm test -- --shard=2/3", name: "shard-2" },
+    { command: "npm test -- --shard=3/3", name: "shard-3" }
+  ]
+})
+// -> All 3 shards run in parallel, results collected together
+```
+
 ## Architecture
 
 ```
 src/
   index.js            Entry point, server bootstrap, graceful shutdown
-  tools.js            9 MCP tool registrations with Zod schemas
+  tools.js            15 MCP tool registrations with Zod schemas
   pty-session.js      PTY session: marker injection, idle read, buffer mgmt
   session-manager.js  Session lifecycle, TTL cleanup, concurrency limits
+  smart-tools.js      Pipeline, retry, diff, snapshot, multiplex logic
   shell-detector.js   Cross-platform shell auto-detection
   ansi.js             ANSI escape code stripping
 ```

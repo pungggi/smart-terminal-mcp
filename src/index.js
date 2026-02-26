@@ -10,7 +10,7 @@ const log = (msg) => process.stderr.write(`[smart-terminal-mcp] ${msg}\n`);
 async function main() {
   const server = new McpServer({
     name: 'smart-terminal-mcp',
-    version: '1.0.1',
+    version: '1.1.0',
   });
 
   const manager = new SessionManager();
