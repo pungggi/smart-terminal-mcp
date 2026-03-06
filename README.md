@@ -6,22 +6,33 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 
 ## Features
 
-- **Marker-based completion detection** -- Deterministic command completion via unique markers injected into the shell
-- **Robust command echo removal** -- Pre-command marker helps keep output clean even with shell aliases and expansions
-- **Interactive mode** -- `terminal_write` + `terminal_read` for REPLs, prompts, and interactive programs
-- **Safer one-shot commands** -- `terminal_run` executes real binaries with `cmd + args` and `shell=false`
-- **Structured parsers** -- Supported read-only commands can return both `stdout.raw` and `stdout.parsed`
-- **Paged read-only output** -- `terminal_run_paged` returns a single page of stdout for large command output
-- **Special key support** -- Send Ctrl+C, Tab, arrow keys, etc. without knowing escape codes
-- **Pattern waiting** -- Wait for specific output (e.g. "server listening on port") before continuing
-- **Retry helper** -- Retry flaky terminal commands with bounded backoff and optional output matching
-- **Output diffing** -- Run two commands in one session and compare their outputs with a unified diff
-- **CWD tracking** -- Every `terminal_exec` response includes the current working directory
-- **Output truncation** -- `terminal_exec` and `terminal_read` truncate large outputs to head + tail
-- **Session management** -- Named sessions, TTL auto-cleanup, max 10 concurrent sessions
-- **Blocking mitigations** -- Disables pagers (`GIT_PAGER=cat`, `PAGER=cat`), suppresses PowerShell progress output, and sets UTF-8 for `cmd.exe` on Windows
-- **Best-effort progress notifications** -- Emits MCP `notifications/progress` for long-running `terminal_exec` / `terminal_wait` calls when the client provides a progress token and surfaces those notifications
-- **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` > `bash` > `sh`
+Think of this as a **controlled keyboard + screen for AI**. It can open a real terminal, type commands, read the results, and keep working in the same session.
+
+### Core terminal features
+
+- **Interactive terminal sessions** -- Keeps a real terminal open so the AI can type, read output, and continue where it left off.
+- **Deterministic command completion** -- `terminal_exec` uses unique markers so it can tell when a command has finished.
+- **Clean output** -- Pre-command markers help keep returned output readable, even when shells echo commands or expand aliases.
+- **Working directory tracking** -- `terminal_exec` reports the current folder after each command.
+
+### Long output and long-running commands
+
+- **Interactive reads and writes** -- `terminal_write` + `terminal_read` support prompts, REPLs, and other interactive programs.
+- **Pattern waiting** -- `terminal_wait` can pause until specific text appears, such as `server listening on port`.
+- **Retry helper** -- `terminal_retry` can re-run flaky commands with bounded backoff and optional output matching.
+- **Best-effort progress notifications** -- Long `terminal_exec` / `terminal_wait` calls can emit `notifications/progress` when the client provides a progress token.
+- **Output truncation** -- `terminal_exec` and `terminal_read` shorten very large output by showing the beginning and the end.
+- **Paged read-only output** -- `terminal_run_paged` lets clients fetch large read-only output one page at a time.
+- **Output diffing** -- `terminal_diff` compares two command results and returns a unified diff.
+
+### Safety and usability
+
+- **Safer one-shot commands** -- `terminal_run` executes real binaries with `cmd + args` and `shell=false`.
+- **Structured parsers** -- Some supported read-only commands can return both raw text and parsed output.
+- **Blocking mitigations** -- Disables pagers (`GIT_PAGER=cat`, `PAGER=cat`), suppresses PowerShell progress output, and sets UTF-8 for `cmd.exe` on Windows.
+- **Special key support** -- Can send Ctrl+C, Tab, arrow keys, and similar keys without manually building escape codes.
+- **Session management** -- Supports named sessions, idle cleanup, and up to 10 concurrent sessions.
+- **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` > `bash` > `sh`.
 
 Progress notifications are not the same as full stdout streaming: they currently send periodic status updates for `terminal_exec` and `terminal_wait`, typically based on elapsed time and the latest output line. Whether you actually see them depends on your MCP client.
 
