@@ -53,7 +53,7 @@ test('tool metadata stays concise', () => {
   }
 });
 
-test('tool schemas use lower default output sizes', () => {
+test('tool schemas keep agent-friendly default output sizes', () => {
   const server = createFakeServer();
 
   registerTools(server, {});
@@ -64,10 +64,10 @@ test('tool schemas use lower default output sizes', () => {
     terminalHistoryMaxLines: server.tools.get('terminal_get_history').schema.maxLines.parse(undefined),
     terminalRunPagedPageSize: server.tools.get('terminal_run_paged').schema.pageSize.parse(undefined),
   }, {
-    terminalExecMaxLines: 100,
-    terminalReadMaxLines: 80,
-    terminalHistoryMaxLines: 100,
-    terminalRunPagedPageSize: 50,
+    terminalExecMaxLines: 200,
+    terminalReadMaxLines: 200,
+    terminalHistoryMaxLines: 200,
+    terminalRunPagedPageSize: 100,
   });
 });
 

@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_PAGE_SIZE, paginateOutput } from '../src/pager.js';
 
-test('paginateOutput uses the lower default page size', () => {
+test('paginateOutput keeps the broader default page size for agent context', () => {
   const lines = Array.from({ length: DEFAULT_PAGE_SIZE + 1 }, (_, index) => `line ${index + 1}`).join('\n');
   const result = paginateOutput(lines);
 
-  assert.equal(result.pageSize, 50);
+  assert.equal(result.pageSize, 100);
   assert.equal(result.hasNext, true);
-  assert.equal(result.pageText.split('\n').length, 50);
+  assert.equal(result.pageText.split('\n').length, 100);
 });
 
 test('paginateOutput returns the first page and hasNext for remaining lines', () => {

@@ -119,7 +119,7 @@ Execute a command with deterministic completion detection.
 | `sessionId` | string | *required* | Session ID |
 | `command` | string | *required* | Command to execute |
 | `timeout` | number | 30000 | Timeout in ms (max 10min) |
-| `maxLines` | number | 100 | Max output lines before truncation |
+| `maxLines` | number | 200 | Max output lines before truncation |
 
 **Returns**: `output`, `exitCode`, `cwd`, `timedOut`
 
@@ -150,7 +150,7 @@ Run a read-only one-shot command using `cmd + args` with `shell=false` and retur
 | `timeout` | number | 30000 | Timeout in ms |
 | `maxOutputBytes` | number | 102400 | Max combined stdout/stderr bytes to capture |
 | `page` | number | 0 | 0-indexed page number |
-| `pageSize` | number | 50 | Lines per page |
+| `pageSize` | number | 100 | Lines per page |
 
 **Returns**: Same envelope as `terminal_run`, plus `pageInfo.page`, `pageInfo.pageSize`, `pageInfo.totalLines`, `pageInfo.hasNext`
 
@@ -172,7 +172,7 @@ Read buffered output with idle detection.
 | `sessionId` | string | *required* | Session ID |
 | `timeout` | number | 30000 | Hard timeout in ms |
 | `idleTimeout` | number | 500 | Return after this many ms of silence |
-| `maxLines` | number | 80 | Max output lines |
+| `maxLines` | number | 200 | Max output lines |
 
 **Returns**: `output`, `timedOut`
 
@@ -184,11 +184,11 @@ Retrieve past terminal output without consuming it. Non-destructive — returns 
 |-------|------|---------|-------------|
 | `sessionId` | string | *required* | Session ID |
 | `offset` | number | 0 | Lines to skip from the end (0 = most recent). Use for pagination. |
-| `maxLines` | number | 100 | Max lines to return |
+| `maxLines` | number | 200 | Max lines to return |
 
 **Returns**: `lines`, `totalLines`, `returnedFrom`, `returnedTo`
 
-These defaults are intentionally conservative for token efficiency; callers can raise `maxLines` or `pageSize` explicitly when they need more context.
+These defaults favor agent usability while still allowing callers to lower `maxLines` or `pageSize` explicitly when they want tighter responses.
 
 ### `terminal_send_key`
 
@@ -249,7 +249,13 @@ Write content directly to a file on disk. Resolves paths relative to the session
 
 ### `terminal_list`
 
-List all active terminal sessions with metadata (ID, name, shell, cwd, idle time, alive/busy status).
+List all active terminal sessions.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `verbose` | boolean | `true` | Include full metadata |
+
+**Returns**: `sessions`, `count` (`verbose: false` returns `id`, `name`, `cwd`, `alive`, `busy` only)
 
 ## Usage Examples
 
@@ -270,7 +276,7 @@ terminal_run({ cmd: "git", args: ["status", "--porcelain=v1", "--branch"] })
 ### Page through large read-only output
 
 ```
-terminal_run_paged({ cmd: "git", args: ["log", "--oneline"], page: 0, pageSize: 50 })
+terminal_run_paged({ cmd: "git", args: ["log", "--oneline"], page: 0, pageSize: 100 })
 -> { ok: true, stdout: { raw: "...", parsed: null }, pageInfo: { totalLines: 120, hasNext: true } }
 ```
 
