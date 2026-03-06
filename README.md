@@ -4,6 +4,19 @@ A PTY-based MCP server with strong Windows support that gives AI agents (Claude,
 
 Unlike simple `exec`-based approaches, this provides full PTY sessions with bidirectional communication, enabling interactive CLI tools, incremental terminal reads, and PTY-backed terminal behavior.
 
+## Why use this instead of your AI client's built-in terminal?
+
+Install this if you want the AI to work more like a developer using a real terminal, not just fire off isolated commands.
+
+This MCP is most useful when you want:
+
+- **Persistent terminal state** -- Keep the same shell session alive across steps, including the current folder, environment, and running processes.
+- **Better interactive behavior** -- Handle prompts, REPLs, dev servers, Ctrl+C, arrow keys, and other real terminal interactions.
+- **More control over large output** -- Truncate, page, diff, retry, wait for patterns, or fetch history instead of dumping everything at once.
+- **More predictable automation** -- Use deterministic completion markers instead of guessing when a command is done.
+
+If your AI client already gives you a stable, stateful, interactive terminal with good output handling, you may not need this MCP.
+
 ## Features
 
 Think of this as a **controlled keyboard + screen for AI**. It can open a real terminal, type commands, read the results, and keep working in the same session.
