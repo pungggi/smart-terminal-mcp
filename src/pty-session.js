@@ -9,6 +9,10 @@ const HISTORY_MAX_LINES = 10_000;
 const BANNER_WAIT_MS = 2000;
 const BANNER_IDLE_MS = 500;
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Key name to escape sequence mapping for terminal_send_key.
  */
@@ -84,6 +88,8 @@ export class PtySession {
     this._historyTotalLines = 0;
     /** Partial line not yet terminated by newline */
     this._historyPartial = '';
+    /** Byte offset for unread output returned by terminal_read */
+    this._readCursor = 0;
     /** @type {((data: string) => void)[]} */
     this._dataListeners = [];
 
@@ -114,7 +120,9 @@ export class PtySession {
       this._buffer += data;
       // Enforce buffer cap — keep tail
       if (this._buffer.length > MAX_BUFFER_BYTES) {
+        const overflow = this._buffer.length - MAX_BUFFER_BYTES;
         this._buffer = this._buffer.slice(-MAX_BUFFER_BYTES);
+        this._readCursor = Math.max(0, this._readCursor - overflow);
       }
       // Append cleaned output to rolling history
       this._appendToHistory(data);
@@ -148,7 +156,7 @@ export class PtySession {
       await this._readUntilIdle(3000, 500);
     }
     // Clear buffer after init so it doesn't pollute first command output
-    this._buffer = '';
+    this._resetBuffer();
   }
 
   /**
@@ -170,7 +178,7 @@ export class PtySession {
     }
 
     this.busy = true;
-    this._buffer = '';
+    this._resetBuffer();
 
     const marker = `__MCP_DONE_${randomUUID().replace(/-/g, '')}__`;
     const cwdMarker = `__MCP_CWD_`;
@@ -232,12 +240,13 @@ export class PtySession {
   async read({ timeout = 30000, idleTimeout = 500, maxLines = 200 } = {}) {
     if (!this.alive) {
       // Return whatever is left in buffer
-      const leftover = stripAnsi(this._buffer).trim();
-      this._buffer = '';
+      const leftover = stripAnsi(this._consumeUnreadBuffer()).trim();
+      this._resetBuffer();
       return { output: leftover, timedOut: false };
     }
 
-    const raw = await this._readUntilIdle(timeout, idleTimeout);
+    await this._readUntilIdle(timeout, idleTimeout);
+    const raw = this._consumeUnreadBuffer();
     const output = stripAnsi(raw).trim();
 
     return {
@@ -414,12 +423,24 @@ export class PtySession {
   _wrapCommand(command, marker, cwdMarker, preMarker) {
     switch (this.shellType) {
       case 'powershell':
-        return `Write-Host "${preMarker}"; ${command}; Write-Host "${marker}_$LASTEXITCODE__"; Write-Host "${cwdMarker}$(Get-Location)__"`;
+        return `Write-Host "${preMarker}"; ${command}; Write-Host "${marker}_\${LASTEXITCODE}__"; Write-Host "${cwdMarker}$((Get-Location).Path)__"`;
       case 'cmd':
         return `echo ${preMarker} & ${command} & echo ${marker}_%ERRORLEVEL%__ & echo ${cwdMarker}%CD%__`;
       default: // bash/zsh
         return `echo "${preMarker}"; ${command}; echo "${marker}_$?__"; echo "${cwdMarker}$(pwd)__"`;
     }
+  }
+
+  _resetBuffer() {
+    this._buffer = '';
+    this._readCursor = 0;
+  }
+
+  _consumeUnreadBuffer() {
+    const start = Math.min(this._readCursor, this._buffer.length);
+    const unread = this._buffer.slice(start);
+    this._readCursor = this._buffer.length;
+    return unread;
   }
 
   /**
@@ -508,38 +529,43 @@ export class PtySession {
    * Parse raw output: strip echoed command using preMarker, extract exit code, extract CWD.
    */
   _parseOutput(raw, marker, cwdMarker, preMarker) {
-    let clean = stripAnsi(raw);
+    const clean = stripAnsi(raw);
     const lines = clean.split(/\r?\n/);
     const outputLines = [];
     let exitCode = null;
     let cwd = null;
+    const markerRegex = new RegExp(`^${escapeRegExp(marker)}_(\\d+)__$`);
+    const plainMarkerRegex = new RegExp(`^${escapeRegExp(marker)}$`);
+    const cwdRegex = new RegExp(`^${escapeRegExp(cwdMarker)}(.+)__$`);
 
     // Find preMarker — start capturing output only after we see it
     let foundPreMarker = false;
 
     for (const line of lines) {
+      const trimmedLine = line.trim();
+
       // Wait for preMarker before capturing any output
       if (!foundPreMarker) {
-        if (line.includes(preMarker)) {
+        if (trimmedLine === preMarker) {
           foundPreMarker = true;
         }
         continue;
       }
 
       // Extract exit code from marker line
-      const markerMatch = line.match(new RegExp(`${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_(\\d+)__`));
+      const markerMatch = trimmedLine.match(markerRegex);
       if (markerMatch) {
         exitCode = parseInt(markerMatch[1], 10);
         continue;
       }
 
       // Plain marker without exit code
-      if (line.includes(marker)) {
+      if (plainMarkerRegex.test(trimmedLine)) {
         continue;
       }
 
       // Extract CWD
-      const cwdMatch = line.match(new RegExp(`${cwdMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(.+)__`));
+      const cwdMatch = trimmedLine.match(cwdRegex);
       if (cwdMatch) {
         cwd = cwdMatch[1].trim();
         continue;
