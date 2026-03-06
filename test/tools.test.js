@@ -62,14 +62,47 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalExecMaxLines: server.tools.get('terminal_exec').schema.maxLines.parse(undefined),
     terminalReadMaxLines: server.tools.get('terminal_read').schema.maxLines.parse(undefined),
     terminalHistoryMaxLines: server.tools.get('terminal_get_history').schema.maxLines.parse(undefined),
+    terminalHistoryFormat: server.tools.get('terminal_get_history').schema.format.parse(undefined),
     terminalRunPagedPageSize: server.tools.get('terminal_run_paged').schema.pageSize.parse(undefined),
     terminalRunParseOnly: server.tools.get('terminal_run').schema.parseOnly.parse(undefined),
   }, {
     terminalExecMaxLines: 200,
     terminalReadMaxLines: 200,
     terminalHistoryMaxLines: 200,
+    terminalHistoryFormat: 'lines',
     terminalRunPagedPageSize: 100,
     terminalRunParseOnly: false,
+  });
+});
+
+test('terminal_get_history forwards format and returns text payloads', async () => {
+  const server = createFakeServer();
+  const historyCalls = [];
+  const manager = {
+    get: () => ({
+      getHistory: (opts) => {
+        historyCalls.push(opts);
+        return { text: 'line 2\nline 3', totalLines: 3, returnedFrom: 1, returnedTo: 3 };
+      },
+    }),
+  };
+
+  registerTools(server, manager);
+
+  const result = await server.tools.get('terminal_get_history').handler({
+    sessionId: 's1',
+    offset: 0,
+    maxLines: 2,
+    format: 'text',
+  });
+
+  assert.deepEqual(historyCalls, [{ offset: 0, limit: 2, format: 'text' }]);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    sessionId: 's1',
+    text: 'line 2\nline 3',
+    totalLines: 3,
+    returnedFrom: 1,
+    returnedTo: 3,
   });
 });
 

@@ -77,6 +77,21 @@ test('getHistory keeps the broader default history limit for agent context', () 
   assert.equal(result.returnedTo, 220);
 });
 
+test('getHistory can return text mode with the same metadata', () => {
+  const session = createSession();
+  session._history = ['line 1', 'line 2', 'line 3'];
+  session._historyTotalLines = 5;
+
+  const result = session.getHistory({ offset: 1, limit: 2, format: 'text' });
+
+  assert.deepEqual(result, {
+    text: 'line 1\nline 2',
+    totalLines: 5,
+    returnedFrom: 2,
+    returnedTo: 4,
+  });
+});
+
 test('waitForPattern returns only the tail by default', async () => {
   const session = createWaitSession('line 1\nline 2\nline 3\nready\n');
 

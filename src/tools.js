@@ -4,7 +4,7 @@ import { resolve, dirname } from 'node:path';
 import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, runCommand } from './command-runner.js';
 import { normalizeCommandName } from './command-parsers.js';
 import { DEFAULT_PAGE_SIZE, paginateOutput } from './pager.js';
-import { DEFAULT_EXEC_MAX_LINES, DEFAULT_HISTORY_LIMIT, DEFAULT_READ_MAX_LINES } from './pty-session.js';
+import { DEFAULT_EXEC_MAX_LINES, DEFAULT_HISTORY_FORMAT, DEFAULT_HISTORY_LIMIT, DEFAULT_READ_MAX_LINES } from './pty-session.js';
 
 const FS_ERROR_MESSAGES = {
   EACCES: 'Permission denied',
@@ -209,10 +209,11 @@ export function registerTools(server, manager) {
       sessionId: z.string().describe('Session ID'),
       offset: z.number().int().min(0).default(0).describe('History offset'),
       maxLines: z.number().int().min(1).max(10000).default(DEFAULT_HISTORY_LIMIT).describe('Max lines to return'),
+      format: z.enum(['lines', 'text']).default(DEFAULT_HISTORY_FORMAT).describe('History format'),
     },
-    async ({ sessionId, offset, maxLines }) => {
+    async ({ sessionId, offset, maxLines, format }) => {
       const session = manager.get(sessionId);
-      const result = session.getHistory({ offset, limit: maxLines });
+      const result = session.getHistory({ offset, limit: maxLines, format });
       return jsonContent({ sessionId, ...result });
     }
   );

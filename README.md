@@ -186,8 +186,9 @@ Retrieve past terminal output without consuming it. Non-destructive — returns 
 | `sessionId` | string | *required* | Session ID |
 | `offset` | number | 0 | Lines to skip from the end (0 = most recent). Use for pagination. |
 | `maxLines` | number | 200 | Max lines to return |
+| `format` | string | `"lines"` | Response format: `lines` or `text` |
 
-**Returns**: `lines`, `totalLines`, `returnedFrom`, `returnedTo`
+**Returns**: `lines` or `text`, plus `totalLines`, `returnedFrom`, `returnedTo`
 
 These defaults favor agent usability while still allowing callers to lower `maxLines` or `pageSize` explicitly when they want tighter responses.
 

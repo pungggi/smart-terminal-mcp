@@ -11,6 +11,7 @@ const BANNER_IDLE_MS = 500;
 export const DEFAULT_EXEC_MAX_LINES = 200;
 export const DEFAULT_READ_MAX_LINES = 200;
 export const DEFAULT_HISTORY_LIMIT = 200;
+export const DEFAULT_HISTORY_FORMAT = 'lines';
 const DEFAULT_WAIT_RETURN_MODE = 'tail';
 const DEFAULT_WAIT_TAIL_LINES = 50;
 
@@ -393,9 +394,10 @@ export class PtySession {
    * @param {object} opts
    * @param {number} [opts.offset=0] - Lines to skip from the end (for pagination)
    * @param {number} [opts.limit=100] - Max lines to return
-   * @returns {{ lines: string[], totalLines: number, returnedFrom: number, returnedTo: number }}
+   * @param {'lines'|'text'} [opts.format='lines'] - History response format
+   * @returns {{ lines: string[], totalLines: number, returnedFrom: number, returnedTo: number } | { text: string, totalLines: number, returnedFrom: number, returnedTo: number }}
    */
-  getHistory({ offset = 0, limit = DEFAULT_HISTORY_LIMIT } = {}) {
+  getHistory({ offset = 0, limit = DEFAULT_HISTORY_LIMIT, format = DEFAULT_HISTORY_FORMAT } = {}) {
     const len = this._history.length;
     const end = Math.max(0, len - offset);
     const start = Math.max(0, end - limit);
@@ -403,11 +405,22 @@ export class PtySession {
 
     // Map buffer indices to absolute line numbers
     const evicted = this._historyTotalLines - len;
-    return {
-      lines,
+    const result = {
       totalLines: this._historyTotalLines,
       returnedFrom: evicted + start,
       returnedTo: evicted + end,
+    };
+
+    if (format === 'text') {
+      return {
+        ...result,
+        text: lines.join('\n'),
+      };
+    }
+
+    return {
+      ...result,
+      lines,
     };
   }
 
