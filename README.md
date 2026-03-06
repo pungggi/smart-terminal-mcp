@@ -33,10 +33,10 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 
 ## Installation
 
-No installation needed — run directly via `npx`:
+Recommended: run the stable release directly via `npx`:
 
 ```bash
-npx smart-terminal-mcp
+npx smart-terminal-mcp@stable
 ```
 
 Or install globally:
@@ -64,7 +64,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "smart-terminal": {
       "command": "npx",
-      "args": ["-y", "smart-terminal-mcp"]
+      "args": ["-y", "smart-terminal-mcp@stable"]
     }
   }
 }
@@ -73,7 +73,7 @@ Add to your `claude_desktop_config.json`:
 ### Claude Code
 
 ```bash
-claude mcp add smart-terminal -- npx -y smart-terminal-mcp
+claude mcp add smart-terminal -- npx -y smart-terminal-mcp@stable
 ```
 
 ### Cursor
@@ -85,13 +85,13 @@ Add to your Cursor MCP settings:
   "mcpServers": {
     "smart-terminal": {
       "command": "npx",
-      "args": ["-y", "smart-terminal-mcp"]
+      "args": ["-y", "smart-terminal-mcp@stable"]
     }
   }
 }
 ```
 
-To pin a specific version, use `smart-terminal-mcp@1.0.1` instead.
+If you want to pin an exact release instead of following the stable tag, replace `@stable` with a version such as `@1.0.1`.
 
 ## Tools
 
