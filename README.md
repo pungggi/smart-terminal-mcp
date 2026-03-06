@@ -2,7 +2,7 @@
 
 A Windows-native MCP server that gives AI agents (Claude, Cursor, etc.) real interactive terminal access via pseudo-terminals ([node-pty](https://github.com/microsoft/node-pty)).
 
-Unlike simple `exec`-based approaches, this provides full PTY sessions with bidirectional communication, enabling interactive CLI tools, real-time output streaming, and proper terminal emulation.
+Unlike simple `exec`-based approaches, this provides full PTY sessions with bidirectional communication, enabling interactive CLI tools, incremental terminal reads, and proper terminal emulation.
 
 ## Features
 
@@ -20,8 +20,10 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 - **Output truncation** -- Large outputs are automatically truncated to head + tail
 - **Session management** -- Named sessions, TTL auto-cleanup, max 10 concurrent sessions
 - **Anti-blocking** -- Disables pagers (`GIT_PAGER=cat`), progress bars, and sets UTF-8 on Windows
-- **Progress notifications** -- Real-time MCP progress updates during long-running commands
+- **Best-effort progress notifications** -- Emits MCP `notifications/progress` for long-running `terminal_exec` / `terminal_wait` calls when the client provides a progress token and surfaces those notifications
 - **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` or `bash`
+
+Progress notifications are not the same as full stdout streaming: they currently send periodic status updates for `terminal_exec` and `terminal_wait`, typically based on elapsed time and the latest output line. Whether you actually see them depends on your MCP client.
 
 ## Requirements
 
@@ -116,7 +118,7 @@ Start a new interactive terminal session.
 
 ### `terminal_exec`
 
-Execute a command with deterministic completion detection.
+Execute a command with deterministic completion detection. If the MCP client sends a `progressToken`, long-running calls may also emit best-effort `notifications/progress` updates.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -211,7 +213,7 @@ Send a named special key.
 
 ### `terminal_wait`
 
-Wait for a specific pattern in the output stream.
+Wait for a specific pattern in the output stream. If the MCP client sends a `progressToken`, long-running waits may also emit best-effort `notifications/progress` updates.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
