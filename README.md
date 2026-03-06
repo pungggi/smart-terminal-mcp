@@ -1,8 +1,8 @@
 # smart-terminal-mcp
 
-A PTY-based MCP server with strong Windows support that gives AI agents (Claude, Cursor, etc.) interactive terminal access via pseudo-terminals ([node-pty](https://github.com/microsoft/node-pty)).
+A PTY-based MCP server with strong Windows support that gives AI agents (Claude, Cursor, etc.) persistent, interactive shell access via pseudo-terminals ([node-pty](https://github.com/microsoft/node-pty)).
 
-Unlike simple `exec`-based approaches, this provides full PTY sessions with bidirectional communication, enabling interactive CLI tools, incremental terminal reads, and PTY-backed terminal behavior.
+Unlike simple `exec`-based approaches, this keeps PTY-backed shell sessions alive across steps, with bidirectional communication for interactive CLI tools, incremental reads, and session state that carries forward.
 
 ## Why use this instead of your AI client's built-in terminal?
 
@@ -13,7 +13,7 @@ This MCP is most useful when you want:
 - **Portable workflow across clients** -- The same terminal tools and habits work across Claude Code, Cursor, Trae, Antigravity, and other MCP-capable clients.
 - **Reusable prompts and tooling** -- Workflows built around tools like `terminal_wait`, `terminal_retry`, `terminal_run_paged`, and `terminal_get_history` are easier to reuse across teams and clients, with less lock-in to one client's terminal behavior.
 - **Persistent terminal state** -- Keep the same shell session alive across steps, including the current folder, environment, and running processes.
-- **Better interactive behavior** -- Handle prompts, REPLs, dev servers, Ctrl+C, arrow keys, and other real terminal interactions.
+- **Better interactive behavior** -- Handle prompts, REPLs, dev servers, Ctrl+C, arrow keys, and other interactive terminal behavior.
 - **More control over large output** -- Truncate, page, diff, retry, wait for patterns, or fetch history instead of dumping everything at once.
 - **More predictable automation** -- Use deterministic completion markers instead of guessing when a command is done.
 
@@ -21,18 +21,18 @@ If your AI client already gives you a stable, stateful, interactive terminal wit
 
 ## Features
 
-Think of this as a **controlled keyboard + screen for AI**. It can open a real terminal, type commands, read the results, and keep working in the same session.
+Think of this as a **controlled keyboard + terminal for AI**. It opens a persistent PTY-backed shell session, sends commands and keystrokes, reads output, and keeps working in the same session.
 
 ### Core terminal features
 
-- **Interactive terminal sessions** -- Keeps a real terminal open so the AI can type, read output, and continue where it left off.
+- **Interactive terminal sessions** -- Keeps a persistent PTY-backed shell session open so the AI can send input, read output, and pick up where it left off.
 - **Deterministic command completion** -- `terminal_exec` uses unique markers so it can tell when a command has finished.
 - **Clean output** -- Pre-command markers help keep returned output readable, even when shells echo commands or expand aliases.
 - **Working directory tracking** -- `terminal_exec` reports the current folder after each command.
 
 ### Long output and long-running commands
 
-- **Interactive reads and writes** -- `terminal_write` + `terminal_read` support prompts, REPLs, and other interactive programs.
+- **Interactive reads and writes** -- `terminal_write` + `terminal_read` support prompts, REPLs, and other interactive programs without leaving the current session.
 - **Pattern waiting** -- `terminal_wait` can pause until specific text appears, such as `server listening on port`.
 - **Retry helper** -- `terminal_retry` can re-run flaky commands with bounded backoff and optional output matching.
 - **Best-effort progress notifications** -- Long `terminal_exec` / `terminal_wait` calls can emit `notifications/progress` when the client provides a progress token.
@@ -42,10 +42,10 @@ Think of this as a **controlled keyboard + screen for AI**. It can open a real t
 
 ### Safety and usability
 
-- **Safer one-shot commands** -- `terminal_run` executes real binaries with `cmd + args` and `shell=false`.
+- **Safer one-shot commands** -- `terminal_run` executes binaries directly with `cmd + args` and `shell=false` for more predictable automation.
 - **Structured parsers** -- Some supported read-only commands can return both raw text and parsed output.
 - **Blocking mitigations** -- Disables pagers (`GIT_PAGER=cat`, `PAGER=cat`), suppresses PowerShell progress output, and sets UTF-8 for `cmd.exe` on Windows.
-- **Special key support** -- Can send Ctrl+C, Tab, arrow keys, and similar keys without manually building escape codes.
+- **Special key support** -- Can send Ctrl+C, Tab, arrow keys, and similar keys without manually constructing escape sequences.
 - **Session management** -- Supports named sessions, idle cleanup, and up to 10 concurrent sessions.
 - **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` > `bash` > `sh`.
 
