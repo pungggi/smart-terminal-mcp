@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { runCommand } from '../src/command-runner.js';
+import { getStructuredParserHint, runCommand } from '../src/command-runner.js';
 
 test('runCommand captures stdout for a successful command', async () => {
   const result = await runCommand({
@@ -78,4 +78,56 @@ test('runCommand can omit raw output when parseOnly is enabled', async () => {
   assert.equal(result.stdout.raw, '');
   assert.ok(Array.isArray(result.stdout.parsed?.paths));
   assert.ok(result.stdout.parsed.paths.length > 0);
+});
+
+test('getStructuredParserHint returns a hint for large unmatched parser-worthy output', () => {
+  const hint = getStructuredParserHint({
+    cmd: 'git',
+    args: ['log', '--stat'],
+    ok: true,
+    parseRequested: true,
+    parsed: null,
+    stdout: 'commit summary line\n'.repeat(20),
+  });
+
+  assert.equal(hint, 'Structured parser unavailable for this command signature. If you need this often, propose one.');
+});
+
+test('getStructuredParserHint skips short unmatched output', () => {
+  const hint = getStructuredParserHint({
+    cmd: 'git',
+    args: ['log', '--stat'],
+    ok: true,
+    parseRequested: true,
+    parsed: null,
+    stdout: 'short\n',
+  });
+
+  assert.equal(hint, null);
+});
+
+test('getStructuredParserHint skips commands when parsing was not requested', () => {
+  const hint = getStructuredParserHint({
+    cmd: 'git',
+    args: ['log', '--stat'],
+    ok: true,
+    parseRequested: false,
+    parsed: null,
+    stdout: 'commit summary line\n'.repeat(20),
+  });
+
+  assert.equal(hint, null);
+});
+
+test('getStructuredParserHint skips non parser-worthy commands', () => {
+  const hint = getStructuredParserHint({
+    cmd: 'git',
+    args: ['show'],
+    ok: true,
+    parseRequested: true,
+    parsed: null,
+    stdout: 'commit summary line\n'.repeat(20),
+  });
+
+  assert.equal(hint, null);
 });

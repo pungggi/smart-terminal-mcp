@@ -137,7 +137,7 @@ Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Sa
 | `parse` | boolean | `true` | Attempt structured parsing for supported commands |
 | `parseOnly` | boolean | `false` | Drop raw stdout if parsed |
 
-**Returns**: `ok`, `cmd`, `args`, `cwd`, `exitCode`, `timedOut`, `durationMs`, `stdout.raw`, `stdout.parsed`, `stderr.raw`
+**Returns**: `ok`, `cmd`, `args`, `cwd`, `exitCode`, `timedOut`, `durationMs`, `stdout.raw`, `stdout.parsed`, `stderr.raw`, optional `hint`
 
 ### `terminal_run_paged`
 
@@ -338,6 +338,11 @@ src/
 - `where <name>` / `which <name>`
 
 Set `parseOnly: true` to omit `stdout.raw` when a supported parser succeeds. Unsupported commands still return `stdout.raw`; `stdout.parsed` is `null`.
+
+When parsing was requested but no parser matched, `terminal_run` may include a short `hint` for parser-worthy command signatures with larger raw output:
+- currently limited to `git` plus `where` / `which`
+- only when the command succeeds and `stdout.raw` is large enough to be worth suggesting
+- wording: `Structured parser unavailable for this command signature. If you need this often, propose one.`
 
 ## License
 

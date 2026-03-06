@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process';
 import { resolve as resolvePath } from 'node:path';
-import { parseCommandOutput } from './command-parsers.js';
+import { normalizeCommandName, parseCommandOutput } from './command-parsers.js';
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024;
+const STRUCTURED_PARSER_HINT = 'Structured parser unavailable for this command signature. If you need this often, propose one.';
+const PARSER_HINT_MIN_STDOUT_BYTES = 200;
+const PARSER_HINT_COMMANDS = new Set(['where', 'which']);
+const PARSER_HINT_GIT_SUBCOMMANDS = new Set(['branch', 'diff', 'log', 'remote', 'rev-parse', 'status']);
 
 export async function runCommand({
   cmd,
@@ -91,14 +95,41 @@ export async function runCommand({
 
       if (signal) result.signal = signal;
       if (maxOutputExceeded) result.maxOutputExceeded = true;
-      if ((parse || parseOnly) && !timedOut && !maxOutputExceeded) {
+      const parseRequested = parse || parseOnly;
+      if (parseRequested && !timedOut && !maxOutputExceeded) {
         result.stdout.parsed = parseCommandOutput({ cmd, args, stdout: stdoutRaw });
         if (parseOnly && result.stdout.parsed) {
           result.stdout.raw = '';
         }
       }
 
+      const hint = getStructuredParserHint({
+        cmd,
+        args,
+        ok: result.ok,
+        parseRequested,
+        parsed: result.stdout.parsed,
+        stdout: stdoutRaw,
+      });
+      if (hint) result.hint = hint;
+
       resolve(result);
     });
   });
+}
+
+export function getStructuredParserHint({ cmd, args, ok, parseRequested, parsed, stdout }) {
+  if (!ok || !parseRequested || parsed) return null;
+  if (Buffer.byteLength(stdout, 'utf8') < PARSER_HINT_MIN_STDOUT_BYTES) return null;
+  if (!isParserHintEligibleCommand(cmd, args)) return null;
+  return STRUCTURED_PARSER_HINT;
+}
+
+function isParserHintEligibleCommand(cmd, args) {
+  const name = normalizeCommandName(cmd);
+  if (PARSER_HINT_COMMANDS.has(name)) return true;
+  if (name !== 'git') return false;
+
+  const subcommand = args[0]?.toLowerCase();
+  return PARSER_HINT_GIT_SUBCOMMANDS.has(subcommand);
 }
