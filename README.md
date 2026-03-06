@@ -6,16 +6,20 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 
 ## Why use this instead of your AI client's built-in terminal?
 
-Install this if you want the AI to work more like a developer using a real terminal, not just fire off isolated commands.
+Install this if you want a more consistent terminal workflow across different AI clients, not just whatever built-in terminal behavior one client happens to provide.
 
 This MCP is most useful when you want:
 
+- **The same workflow across multiple agent platforms** -- If you move between Claude Code, Cursor, Trae, Antigravity, or other MCP-capable clients, the terminal tools stay the same.
+- **Less client-specific behavior** -- Prompts, instructions, and habits do not need to depend as much on one client's terminal UI or quirks.
+- **Reusable prompts, playbooks, and instructions** -- A workflow built around tools like `terminal_wait`, `terminal_retry`, `terminal_run_paged`, or `terminal_get_history` is easier to reuse across teams and clients.
+- **Reusable tooling with less lock-in** -- The terminal layer lives in MCP tools rather than in one client's built-in terminal behavior.
 - **Persistent terminal state** -- Keep the same shell session alive across steps, including the current folder, environment, and running processes.
 - **Better interactive behavior** -- Handle prompts, REPLs, dev servers, Ctrl+C, arrow keys, and other real terminal interactions.
 - **More control over large output** -- Truncate, page, diff, retry, wait for patterns, or fetch history instead of dumping everything at once.
 - **More predictable automation** -- Use deterministic completion markers instead of guessing when a command is done.
 
-If your AI client already gives you a stable, stateful, interactive terminal with good output handling, you may not need this MCP.
+If your AI client already gives you a stable, stateful, interactive terminal with good output handling, you may not need this MCP for basic command execution. The main reason to add it is to make terminal-driven workflows more explicit, reusable, and portable across clients.
 
 ## Features
 
