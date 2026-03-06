@@ -1,12 +1,12 @@
 # smart-terminal-mcp
 
-A PTY-based MCP server with strong Windows support that gives AI agents (Claude, Cursor, etc.) persistent, interactive shell access via pseudo-terminals ([node-pty](https://github.com/microsoft/node-pty)).
+A PTY-based MCP server with strong Windows support, giving MCP-capable AI clients and their agents persistent, interactive shell access via pseudo-terminals ([node-pty](https://github.com/microsoft/node-pty)).
 
 Unlike simple `exec`-based approaches, this keeps PTY-backed shell sessions alive across steps, with bidirectional communication for interactive CLI tools, incremental reads, and session state that carries forward.
 
 ## Why use this instead of your AI client's built-in terminal?
 
-Install this if you want a more consistent terminal workflow across different AI clients, not just whatever built-in terminal behavior one client happens to provide.
+Install this if you want a more consistent terminal workflow across AI clients, instead of relying on whatever built-in terminal behavior a single client happens to provide.
 
 This MCP is most useful when you want:
 
@@ -17,15 +17,15 @@ This MCP is most useful when you want:
 - **More control over large output** -- Truncate, page, diff, retry, wait for patterns, or fetch history instead of dumping everything at once.
 - **More predictable automation** -- Use deterministic completion markers instead of guessing when a command is done.
 
-If your AI client already gives you a stable, stateful, interactive terminal with good output handling, you may not need this MCP for basic command execution. The main reason to add it is to make terminal-driven workflows more explicit, reusable, and portable across clients.
+If your AI client already provides a stable, stateful, interactive terminal with good output handling, you may not need this MCP for basic command execution. The main reason to add it is to make terminal-driven workflows more explicit, reusable, and portable across clients.
 
 ## Features
 
-Think of this as a **controlled keyboard + terminal for AI**. It opens a persistent PTY-backed shell session, sends commands and keystrokes, reads output, and keeps working in the same session.
+Think of this as a **controlled keyboard + terminal for an agent running inside an MCP client**. It opens a persistent PTY-backed shell session so the agent can send commands and keystrokes, read output, and continue working in the same session.
 
 ### Core terminal features
 
-- **Interactive terminal sessions** -- Keeps a persistent PTY-backed shell session open so the AI can send input, read output, and pick up where it left off.
+- **Interactive terminal sessions** -- Keeps a persistent PTY-backed shell session open so the agent can send input, read output, and pick up where it left off.
 - **Deterministic command completion** -- `terminal_exec` uses unique markers so it can tell when a command has finished.
 - **Clean output** -- Pre-command markers help keep returned output readable, even when shells echo commands or expand aliases.
 - **Working directory tracking** -- `terminal_exec` reports the current folder after each command.
@@ -36,8 +36,8 @@ Think of this as a **controlled keyboard + terminal for AI**. It opens a persist
 - **Pattern waiting** -- `terminal_wait` can pause until specific text appears, such as `server listening on port`.
 - **Retry helper** -- `terminal_retry` can re-run flaky commands with bounded backoff and optional output matching.
 - **Best-effort progress notifications** -- Long `terminal_exec` / `terminal_wait` calls can emit `notifications/progress` when the client provides a progress token.
-- **Output truncation** -- `terminal_exec` and `terminal_read` shorten very large output by showing the beginning and the end.
-- **Paged read-only output** -- `terminal_run_paged` lets clients fetch large read-only output one page at a time.
+- **Output truncation** -- `terminal_exec` and `terminal_read` shorten very large output by returning the beginning and the end.
+- **Paged read-only output** -- `terminal_run_paged` returns large read-only output one page at a time instead of sending the full result at once.
 - **Output diffing** -- `terminal_diff` compares two command results and returns a unified diff.
 
 ### Safety and usability
@@ -49,7 +49,21 @@ Think of this as a **controlled keyboard + terminal for AI**. It opens a persist
 - **Session management** -- Supports named sessions, idle cleanup, and up to 10 concurrent sessions.
 - **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` > `bash` > `sh`.
 
-Progress notifications are not the same as full stdout streaming: they currently send periodic status updates for `terminal_exec` and `terminal_wait`, typically based on elapsed time and the latest output line. Whether you actually see them depends on your MCP client.
+Progress notifications are not the same as full stdout streaming. They currently send periodic status updates for `terminal_exec` and `terminal_wait`, usually based on elapsed time and the latest output line. Whether you see them depends on your MCP client.
+
+## Token efficiency
+
+This MCP does not magically compress terminal output, but it **can help agents use fewer tokens in terminal-heavy workflows** by returning smaller, more targeted responses and making it easier to revisit output only when needed.
+
+The main benefit is **model-context efficiency**, not guaranteed savings in the underlying command's runtime or total bytes produced.
+
+- Use **`terminal_run_paged`** for large read-only output when **the agent** wants one page of the returned result at a time.
+- Lower **`maxLines`**, **`pageSize`**, or **`tailLines`** when **the agent** only needs a narrow slice of the output.
+- Use **`summary: true`** or **`parseOnly: true`** with `terminal_run` when **the agent** benefits more from structured results than raw text.
+- Use **`terminal_wait({ returnMode: "match-only" })`** when the agent only needs to know whether a pattern appeared.
+- Use **`terminal_get_history`** when **the agent** needs to revisit earlier output without re-dumping the whole session into the conversation.
+
+In practice, this lets agents inspect terminal state more selectively instead of repeatedly dumping large logs back into the conversation.
 
 ## Installation
 
@@ -164,7 +178,7 @@ Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Sa
 
 ### `terminal_run_paged`
 
-Run a read-only one-shot command using `cmd + args` with `shell=false` and return a single page of stdout lines. This uses paging rather than head + tail truncation. Paged mode does not parse partial output, but it can return a concise summary for supported read-only commands when `summary: true`.
+Run a read-only one-shot command using `cmd + args` with `shell=false` and return a single page of stdout lines from the captured output. This pages the returned result instead of using head + tail truncation. Paged mode does not parse partial output, but it can return a concise summary for supported read-only commands when `summary: true`.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -214,7 +228,7 @@ Retrieve past terminal output without consuming it. Non-destructive — returns 
 
 **Returns**: `lines` or `text`, plus `totalLines`, `returnedFrom`, `returnedTo`
 
-These defaults favor agent usability while still allowing callers to lower `maxLines` or `pageSize` explicitly when they want tighter responses.
+These defaults favor agent usability while still allowing tool callers to lower `maxLines` or `pageSize` explicitly when they want tighter responses.
 
 ### `terminal_send_key`
 
