@@ -254,12 +254,16 @@ export function registerTools(server, manager) {
       sessionId: z.string().describe('Session ID'),
       pattern: z.string().describe('Pattern'),
       timeout: z.number().int().min(1000).max(600000).default(30000).describe('Timeout in ms'),
+      returnMode: z.enum(['tail', 'full', 'match-only']).default('tail').describe('Return mode'),
+      tailLines: z.number().int().min(1).max(1000).default(50).describe('Tail lines'),
     },
-    async ({ sessionId, pattern, timeout }, extra) => {
+    async ({ sessionId, pattern, timeout, returnMode, tailLines }, extra) => {
       const session = manager.get(sessionId);
       const result = await session.waitForPattern({
         pattern,
         timeout,
+        returnMode,
+        tailLines,
         sendNotification: extra.sendNotification,
         progressToken: extra._meta?.progressToken,
       });

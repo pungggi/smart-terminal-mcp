@@ -208,8 +208,10 @@ Wait for a specific pattern in the output stream.
 | `sessionId` | string | *required* | Session ID |
 | `pattern` | string | *required* | String or regex pattern |
 | `timeout` | number | 30000 | Timeout in ms |
+| `returnMode` | string | `"tail"` | Response mode: `tail`, `full`, `match-only` |
+| `tailLines` | number | 50 | Number of tail lines to return |
 
-**Returns**: `output`, `matched`, `timedOut`
+**Returns**: `output`, `matched`, `timedOut` (`output` may be empty in `match-only` mode)
 
 ### `terminal_resize`
 
@@ -287,6 +289,7 @@ terminal_send_key({ sessionId, key: "ctrl+d" })  -> exit Python
 terminal_start({ name: "dev-server" })
 terminal_write({ sessionId, data: "npm run dev\r" })
 terminal_wait({ sessionId, pattern: "listening on port", timeout: 60000 })
+terminal_wait({ sessionId, pattern: "listening on port", returnMode: "full" })
 ```
 
 ## Architecture

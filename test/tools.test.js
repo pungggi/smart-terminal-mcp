@@ -52,3 +52,47 @@ test('tool metadata stays concise', () => {
     }
   }
 });
+
+test('terminal_wait forwards returnMode and tailLines', async () => {
+  const server = createFakeServer();
+  const waitCalls = [];
+  const manager = {
+    get: () => ({
+      waitForPattern: async (opts) => {
+        waitCalls.push(opts);
+        return { output: 'ready', matched: true, timedOut: false };
+      },
+    }),
+  };
+  const sendNotification = () => { };
+
+  registerTools(server, manager);
+
+  const result = await server.tools.get('terminal_wait').handler(
+    {
+      sessionId: 's1',
+      pattern: 'ready',
+      timeout: 1234,
+      returnMode: 'full',
+      tailLines: 99,
+    },
+    {
+      sendNotification,
+      _meta: { progressToken: 'progress-1' },
+    }
+  );
+
+  assert.deepEqual(waitCalls, [{
+    pattern: 'ready',
+    timeout: 1234,
+    returnMode: 'full',
+    tailLines: 99,
+    sendNotification,
+    progressToken: 'progress-1',
+  }]);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    output: 'ready',
+    matched: true,
+    timedOut: false,
+  });
+});

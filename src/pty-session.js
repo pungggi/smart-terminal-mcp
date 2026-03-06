@@ -8,6 +8,8 @@ const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB
 const HISTORY_MAX_LINES = 10_000;
 const BANNER_WAIT_MS = 2000;
 const BANNER_IDLE_MS = 500;
+const DEFAULT_WAIT_RETURN_MODE = 'tail';
+const DEFAULT_WAIT_TAIL_LINES = 50;
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -260,11 +262,20 @@ export class PtySession {
    * @param {object} opts
    * @param {string} opts.pattern - String or regex pattern to match
    * @param {number} [opts.timeout=30000]
+   * @param {'tail'|'full'|'match-only'} [opts.returnMode='tail']
+   * @param {number} [opts.tailLines=50]
    * @param {Function} [opts.sendNotification]
    * @param {string|number} [opts.progressToken]
    * @returns {Promise<{ output: string, matched: boolean, timedOut: boolean }>}
    */
-  async waitForPattern({ pattern, timeout = 30000, sendNotification, progressToken }) {
+  async waitForPattern({
+    pattern,
+    timeout = 30000,
+    returnMode = DEFAULT_WAIT_RETURN_MODE,
+    tailLines = DEFAULT_WAIT_TAIL_LINES,
+    sendNotification,
+    progressToken,
+  }) {
     if (!this.alive) {
       throw new Error(`Session ${this.id} is no longer alive.`);
     }
@@ -273,6 +284,7 @@ export class PtySession {
     const startTime = Date.now();
     let collected = '';
     let lastProgressAt = 0;
+    const tailTracker = this._createTailTracker();
 
     return new Promise((resolve) => {
       const cleanup = () => {
@@ -284,7 +296,7 @@ export class PtySession {
       const timer = setTimeout(() => {
         cleanup();
         resolve({
-          output: stripAnsi(collected).trim(),
+          output: this._formatWaitOutput(stripAnsi(collected), returnMode, tailLines, tailTracker),
           matched: false,
           timedOut: true,
         });
@@ -292,6 +304,7 @@ export class PtySession {
 
       const onData = (data) => {
         collected += data;
+        this._appendToTailTracker(tailTracker, stripAnsi(data), tailLines);
         const clean = stripAnsi(collected);
 
         // Send progress notifications
@@ -303,7 +316,7 @@ export class PtySession {
         if (regex.test(clean)) {
           cleanup();
           resolve({
-            output: clean.trim(),
+            output: this._formatWaitOutput(clean, returnMode, tailLines, tailTracker),
             matched: true,
             timedOut: false,
           });
@@ -312,10 +325,11 @@ export class PtySession {
 
       // Check existing buffer first
       const existingClean = stripAnsi(this._buffer);
+      this._appendToTailTracker(tailTracker, existingClean, tailLines);
       if (regex.test(existingClean)) {
         clearTimeout(timer);
         resolve({
-          output: existingClean.trim(),
+          output: this._formatWaitOutput(existingClean, returnMode, tailLines, tailTracker),
           matched: true,
           timedOut: false,
         });
@@ -592,6 +606,55 @@ export class PtySession {
     const omitted = lines.length - headCount - tailCount;
 
     return [...head, `\n... ${omitted} lines omitted ...\n`, ...tail].join('\n');
+  }
+
+  _formatWaitOutput(output, returnMode, tailLines, tailTracker) {
+    const trimmedOutput = output.trim();
+    if (!trimmedOutput || returnMode === 'match-only') {
+      return '';
+    }
+    if (returnMode === 'full') {
+      return trimmedOutput;
+    }
+    if (tailTracker) {
+      return this._tailTrackerToOutput(tailTracker);
+    }
+    return this._tailOutput(trimmedOutput, tailLines);
+  }
+
+  _tailOutput(output, tailLines) {
+    const lines = output.split('\n');
+    if (lines.length <= tailLines) {
+      return output;
+    }
+    return lines.slice(-tailLines).join('\n');
+  }
+
+  _createTailTracker() {
+    return {
+      lines: [],
+      partial: '',
+    };
+  }
+
+  _appendToTailTracker(tracker, cleanData, tailLines) {
+    const parts = cleanData.split(/\r?\n/);
+    tracker.partial += parts[0] ?? '';
+
+    for (let i = 1; i < parts.length; i++) {
+      tracker.lines.push(tracker.partial);
+      tracker.partial = parts[i];
+    }
+
+    const overflow = tracker.lines.length - tailLines;
+    if (overflow > 0) {
+      tracker.lines.splice(0, overflow);
+    }
+  }
+
+  _tailTrackerToOutput(tracker) {
+    const lines = tracker.partial ? [...tracker.lines, tracker.partial] : tracker.lines;
+    return lines.join('\n').trim();
   }
 
   _sendProgress(sendNotification, progressToken, content, startTime, timeout) {

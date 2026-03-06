@@ -6,6 +6,14 @@ function createSession() {
   return Object.create(PtySession.prototype);
 }
 
+function createWaitSession(buffer = '') {
+  const session = createSession();
+  session.alive = true;
+  session._buffer = buffer;
+  session._dataListeners = [];
+  return session;
+}
+
 test('PowerShell wrapper uses safe marker interpolation', () => {
   const session = createSession();
   session.shellType = 'powershell';
@@ -53,4 +61,52 @@ test('read returns unread buffered output once', async () => {
   assert.equal(first.output, 'echo hi\r\nhi\r\nPS C:\\repo>');
   assert.equal(first.timedOut, false);
   assert.equal(second.output, '');
+});
+
+test('waitForPattern returns only the tail by default', async () => {
+  const session = createWaitSession('line 1\nline 2\nline 3\nready\n');
+
+  const result = await session.waitForPattern({ pattern: 'ready', tailLines: 2, timeout: 50 });
+
+  assert.deepEqual(result, {
+    output: 'line 3\nready',
+    matched: true,
+    timedOut: false,
+  });
+});
+
+test('waitForPattern can return the full output', async () => {
+  const session = createWaitSession('line 1\nline 2\nready\n');
+
+  const result = await session.waitForPattern({ pattern: 'ready', returnMode: 'full', tailLines: 1, timeout: 50 });
+
+  assert.deepEqual(result, {
+    output: 'line 1\nline 2\nready',
+    matched: true,
+    timedOut: false,
+  });
+});
+
+test('waitForPattern can suppress output entirely', async () => {
+  const session = createWaitSession('booting\nready\n');
+
+  const result = await session.waitForPattern({ pattern: 'ready', returnMode: 'match-only', timeout: 50 });
+
+  assert.deepEqual(result, {
+    output: '',
+    matched: true,
+    timedOut: false,
+  });
+});
+
+test('waitForPattern returns only the configured tail on timeout', async () => {
+  const session = createWaitSession('line 1\nline 2\nline 3\n');
+
+  const result = await session.waitForPattern({ pattern: 'ready', tailLines: 1, timeout: 20 });
+
+  assert.deepEqual(result, {
+    output: 'line 3',
+    matched: false,
+    timedOut: true,
+  });
 });
