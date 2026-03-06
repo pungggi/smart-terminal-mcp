@@ -1,8 +1,30 @@
 import { z } from 'zod';
+import { writeFile, appendFile, mkdir } from 'node:fs/promises';
+import { resolve, dirname } from 'node:path';
 import { SUPPORTED_KEYS } from './pty-session.js';
 
+const FS_ERROR_MESSAGES = {
+  EACCES: 'Permission denied',
+  ENOSPC: 'No space left on device',
+  EROFS: 'Read-only file system',
+  ENOENT: 'Invalid path — a component does not exist',
+  ENOTDIR: 'A component of the path is not a directory',
+  ENAMETOOLONG: 'File name too long',
+  EISDIR: 'Path is a directory, not a file',
+};
+
 /**
- * Register all 10 MCP tools on the server.
+ * Format a filesystem error into a human-readable message with the error code.
+ * @param {NodeJS.ErrnoException} err
+ * @returns {string}
+ */
+function formatFsError(err) {
+  const hint = FS_ERROR_MESSAGES[err.code];
+  return hint ? `${hint} (${err.code})` : err.message;
+}
+
+/**
+ * Register all 11 MCP tools on the server.
  * @param {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer} server
  * @param {import('./session-manager.js').SessionManager} manager
  */
@@ -229,6 +251,49 @@ export function registerTools(server, manager) {
         content: [{
           type: 'text',
           text: JSON.stringify({ sessions, count: sessions.length }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // --- terminal_write_file ---
+  server.tool(
+    'terminal_write_file',
+    'Write content directly to a file on disk. Path is resolved relative to the session\'s current working directory. Safer and more robust than piping content through echo commands — handles special characters, newlines, and large files correctly. For binary files, pass base64-encoded content with encoding "base64".',
+    {
+      sessionId: z.string().describe('Session ID (used to resolve working directory)'),
+      path: z.string().describe('File path (relative to session CWD, or absolute)'),
+      content: z.string().describe('File content to write. For binary files, pass base64-encoded string with encoding="base64".'),
+      encoding: z.enum(['utf-8', 'ascii', 'base64', 'hex', 'latin1']).default('utf-8').describe('File encoding. Use "base64" to decode base64 content into binary. (default: utf-8)'),
+      append: z.boolean().default(false).describe('Append to file instead of overwriting (default: false)'),
+    },
+    async ({ sessionId, path: filePath, content, encoding, append }) => {
+      const session = manager.get(sessionId);
+      const absolutePath = resolve(session.cwd, filePath);
+
+      try {
+        await mkdir(dirname(absolutePath), { recursive: true });
+      } catch (err) {
+        throw new Error(`Failed to create directory "${dirname(absolutePath)}": ${formatFsError(err)}`);
+      }
+
+      try {
+        const writeFn = append ? appendFile : writeFile;
+        await writeFn(absolutePath, content, { encoding });
+      } catch (err) {
+        throw new Error(`Failed to write "${absolutePath}": ${formatFsError(err)}`);
+      }
+
+      const size = Buffer.byteLength(content, encoding);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: true,
+            path: absolutePath,
+            size,
+            append,
+          }, null, 2),
         }],
       };
     }

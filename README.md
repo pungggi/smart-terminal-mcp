@@ -195,6 +195,20 @@ Stop and clean up a terminal session.
 |-------|------|-------------|
 | `sessionId` | string | Session ID to stop |
 
+### `terminal_write_file`
+
+Write content directly to a file on disk. Resolves paths relative to the session's CWD. Safer and more robust than piping content through `echo` — handles special characters, newlines, and large files correctly.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sessionId` | string | *required* | Session ID (used to resolve working directory) |
+| `path` | string | *required* | File path (relative to session CWD, or absolute) |
+| `content` | string | *required* | File content to write |
+| `encoding` | string | `"utf-8"` | File encoding (`utf-8`, `ascii`, `base64`, `hex`, `latin1`) |
+| `append` | boolean | `false` | Append to file instead of overwriting |
+
+**Returns**: `success`, `path` (absolute), `size` (bytes), `append`
+
 ### `terminal_list`
 
 List all active terminal sessions with metadata (ID, name, shell, cwd, idle time, alive/busy status).
@@ -232,7 +246,7 @@ terminal_wait({ sessionId, pattern: "listening on port", timeout: 60000 })
 ```
 src/
   index.js            Entry point, server bootstrap, graceful shutdown
-  tools.js            10 MCP tool registrations with Zod schemas
+  tools.js            11 MCP tool registrations with Zod schemas
   pty-session.js      PTY session: marker injection, idle read, buffer mgmt
   session-manager.js  Session lifecycle, TTL cleanup, concurrency limits
   shell-detector.js   Cross-platform shell auto-detection
