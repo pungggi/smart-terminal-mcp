@@ -19,21 +19,11 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 - **CWD tracking** -- Every `terminal_exec` response includes the current working directory
 - **Output truncation** -- Large outputs are automatically truncated to head + tail
 - **Session management** -- Named sessions, TTL auto-cleanup, max 10 concurrent sessions
-- **Anti-blocking** -- Disables pagers (`GIT_PAGER=cat`), progress bars, and sets UTF-8 on Windows
+- **Anti-blocking** -- Disables pagers (`GIT_PAGER=cat`, `PAGER=cat`), suppresses PowerShell progress output, and sets UTF-8 for `cmd.exe` on Windows
 - **Best-effort progress notifications** -- Emits MCP `notifications/progress` for long-running `terminal_exec` / `terminal_wait` calls when the client provides a progress token and surfaces those notifications
 - **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` or `bash`
 
 Progress notifications are not the same as full stdout streaming: they currently send periodic status updates for `terminal_exec` and `terminal_wait`, typically based on elapsed time and the latest output line. Whether you actually see them depends on your MCP client.
-
-## Requirements
-
-- **Node.js** >= 18
-
-`node-pty` ships prebuilt binaries for most platforms. If prebuilds are unavailable for your OS/architecture, a C/C++ toolchain is needed as fallback:
-
-- **Windows**: [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (select "Desktop development with C++")
-- **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-- **Linux**: `build-essential` and Python 3 (`sudo apt install build-essential python3`)
 
 ## Installation
 

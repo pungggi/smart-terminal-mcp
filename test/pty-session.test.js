@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PtySession } from '../src/pty-session.js';
+import { buildSessionEnv, PtySession } from '../src/pty-session.js';
 
 function createSession() {
   return Object.create(PtySession.prototype);
@@ -14,6 +14,23 @@ function createWaitSession(buffer = '') {
   return session;
 }
 
+test('buildSessionEnv applies anti-blocking environment defaults', () => {
+  const env = buildSessionEnv({ CUSTOM_ENV: 'yes', GIT_PAGER: 'less' }, 'linux');
+
+  assert.equal(env.CUSTOM_ENV, 'yes');
+  assert.equal(env.GIT_PAGER, 'cat');
+  assert.equal(env.PAGER, 'cat');
+  assert.equal(env.LESS, '-FRX');
+  assert.equal(env.TERM, 'xterm-256color');
+  assert.equal(env.DEBIAN_FRONTEND, 'noninteractive');
+});
+
+test('buildSessionEnv skips noninteractive override on Windows', () => {
+  const env = buildSessionEnv({}, 'win32');
+
+  assert.equal(env.DEBIAN_FRONTEND, undefined);
+});
+
 test('PowerShell wrapper uses safe marker interpolation', () => {
   const session = createSession();
   session.shellType = 'powershell';
@@ -22,6 +39,40 @@ test('PowerShell wrapper uses safe marker interpolation', () => {
 
   assert.match(command, /__DONE___\$\{LASTEXITCODE\}__/);
   assert.match(command, /__CWD_\$\(\(Get-Location\)\.Path\)__/);
+});
+
+test('_initShell suppresses PowerShell progress output', async () => {
+  const session = createSession();
+  const writes = [];
+  let resetCalls = 0;
+  session.shellType = 'powershell';
+  session.process = { write: (value) => writes.push(value) };
+  session._readUntilIdle = async () => '';
+  session._resetBuffer = () => {
+    resetCalls++;
+  };
+
+  await session._initShell();
+
+  assert.deepEqual(writes, ["$ProgressPreference = 'SilentlyContinue'\r"]);
+  assert.equal(resetCalls, 1);
+});
+
+test('_initShell sets cmd sessions to UTF-8', async () => {
+  const session = createSession();
+  const writes = [];
+  let resetCalls = 0;
+  session.shellType = 'cmd';
+  session.process = { write: (value) => writes.push(value) };
+  session._readUntilIdle = async () => '';
+  session._resetBuffer = () => {
+    resetCalls++;
+  };
+
+  await session._initShell();
+
+  assert.deepEqual(writes, ['chcp 65001 > nul\r']);
+  assert.equal(resetCalls, 1);
 });
 
 test('_parseOutput ignores echoed wrapper text and keeps real output', () => {

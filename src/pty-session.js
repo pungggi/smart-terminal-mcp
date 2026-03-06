@@ -16,6 +16,23 @@ export const DEFAULT_HISTORY_FORMAT = 'lines';
 const DEFAULT_WAIT_RETURN_MODE = 'tail';
 const DEFAULT_WAIT_TAIL_LINES = 50;
 
+export function buildSessionEnv(customEnv = {}, platformName = platform()) {
+  const env = {
+    ...process.env,
+    ...customEnv,
+    GIT_PAGER: 'cat',
+    PAGER: 'cat',
+    LESS: '-FRX',
+    TERM: 'xterm-256color',
+  };
+
+  if (platformName !== 'win32') {
+    env.DEBIAN_FRONTEND = 'noninteractive';
+  }
+
+  return env;
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -100,18 +117,7 @@ export class PtySession {
     /** @type {((data: string) => void)[]} */
     this._dataListeners = [];
 
-    const env = {
-      ...process.env,
-      ...customEnv,
-      GIT_PAGER: 'cat',
-      PAGER: 'cat',
-      LESS: '-FRX',
-      TERM: 'xterm-256color',
-    };
-
-    if (platform() !== 'win32') {
-      env.DEBIAN_FRONTEND = 'noninteractive';
-    }
+    const env = buildSessionEnv(customEnv);
 
     this.process = pty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
