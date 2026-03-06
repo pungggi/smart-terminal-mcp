@@ -114,9 +114,10 @@ export function registerTools(server, manager) {
       timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS).describe('Timeout in ms'),
       maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Max output bytes'),
       parse: z.boolean().default(true).describe('Parse structured output'),
+      parseOnly: z.boolean().default(false).describe('Drop raw when parsed'),
     },
-    async ({ cmd, args, cwd, timeout, maxOutputBytes, parse }) => {
-      const result = await runCommand({ cmd, args, cwd, timeout, maxOutputBytes, parse });
+    async ({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly }) => {
+      const result = await runCommand({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly });
       return jsonContent(result);
     }
   );

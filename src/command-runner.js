@@ -12,6 +12,7 @@ export async function runCommand({
   timeout = DEFAULT_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
   parse = true,
+  parseOnly = false,
 }) {
   const resolvedCwd = resolvePath(cwd ?? process.cwd());
   const startedAt = Date.now();
@@ -90,8 +91,11 @@ export async function runCommand({
 
       if (signal) result.signal = signal;
       if (maxOutputExceeded) result.maxOutputExceeded = true;
-      if (parse && !timedOut && !maxOutputExceeded) {
+      if ((parse || parseOnly) && !timedOut && !maxOutputExceeded) {
         result.stdout.parsed = parseCommandOutput({ cmd, args, stdout: stdoutRaw });
+        if (parseOnly && result.stdout.parsed) {
+          result.stdout.raw = '';
+        }
       }
 
       resolve(result);

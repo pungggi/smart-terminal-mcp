@@ -63,11 +63,13 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalReadMaxLines: server.tools.get('terminal_read').schema.maxLines.parse(undefined),
     terminalHistoryMaxLines: server.tools.get('terminal_get_history').schema.maxLines.parse(undefined),
     terminalRunPagedPageSize: server.tools.get('terminal_run_paged').schema.pageSize.parse(undefined),
+    terminalRunParseOnly: server.tools.get('terminal_run').schema.parseOnly.parse(undefined),
   }, {
     terminalExecMaxLines: 200,
     terminalReadMaxLines: 200,
     terminalHistoryMaxLines: 200,
     terminalRunPagedPageSize: 100,
+    terminalRunParseOnly: false,
   });
 });
 

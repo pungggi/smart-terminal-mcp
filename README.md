@@ -135,6 +135,7 @@ Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Sa
 | `timeout` | number | 30000 | Timeout in ms |
 | `maxOutputBytes` | number | 102400 | Max combined stdout/stderr bytes to capture |
 | `parse` | boolean | `true` | Attempt structured parsing for supported commands |
+| `parseOnly` | boolean | `false` | Drop raw stdout if parsed |
 
 **Returns**: `ok`, `cmd`, `args`, `cwd`, `exitCode`, `timedOut`, `durationMs`, `stdout.raw`, `stdout.parsed`, `stderr.raw`
 
@@ -320,11 +321,23 @@ src/
 `terminal_run` currently parses a small set of read-only command signatures:
 
 - `git log --oneline`
+- `git log --oneline -n <count>`
 - `git status --porcelain=v1 --branch`
+- `git status --short --branch`
+- `git status --short`
+- `git branch`
+- `git branch --all` / `git branch --remotes`
+- `git branch -vv`
+- `git branch --show-current`
+- `git rev-parse --abbrev-ref HEAD`
+- `git diff --name-only`
+- `git diff --name-status`
+- `git diff --stat`
+- `git remote -v`
 - `tasklist /fo csv /nh`
 - `where <name>` / `which <name>`
 
-Unsupported commands still return `stdout.raw`; `stdout.parsed` is `null`.
+Set `parseOnly: true` to omit `stdout.raw` when a supported parser succeeds. Unsupported commands still return `stdout.raw`; `stdout.parsed` is `null`.
 
 ## License
 

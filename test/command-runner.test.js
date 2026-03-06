@@ -64,3 +64,18 @@ test('runCommand stops when maxOutputBytes is exceeded', async () => {
   assert.equal(result.maxOutputExceeded, true);
   assert.ok(Buffer.byteLength(result.stdout.raw, 'utf8') <= 128);
 });
+
+test('runCommand can omit raw output when parseOnly is enabled', async () => {
+  const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
+  const result = await runCommand({
+    cmd: lookupCommand,
+    args: [lookupCommand],
+    parse: false,
+    parseOnly: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout.raw, '');
+  assert.ok(Array.isArray(result.stdout.parsed?.paths));
+  assert.ok(result.stdout.parsed.paths.length > 0);
+});
