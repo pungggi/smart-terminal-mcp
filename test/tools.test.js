@@ -53,6 +53,24 @@ test('tool metadata stays concise', () => {
   }
 });
 
+test('tool schemas use lower default output sizes', () => {
+  const server = createFakeServer();
+
+  registerTools(server, {});
+
+  assert.deepEqual({
+    terminalExecMaxLines: server.tools.get('terminal_exec').schema.maxLines.parse(undefined),
+    terminalReadMaxLines: server.tools.get('terminal_read').schema.maxLines.parse(undefined),
+    terminalHistoryMaxLines: server.tools.get('terminal_get_history').schema.maxLines.parse(undefined),
+    terminalRunPagedPageSize: server.tools.get('terminal_run_paged').schema.pageSize.parse(undefined),
+  }, {
+    terminalExecMaxLines: 100,
+    terminalReadMaxLines: 80,
+    terminalHistoryMaxLines: 100,
+    terminalRunPagedPageSize: 50,
+  });
+});
+
 test('terminal_wait forwards returnMode and tailLines', async () => {
   const server = createFakeServer();
   const waitCalls = [];

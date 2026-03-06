@@ -8,6 +8,9 @@ const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB
 const HISTORY_MAX_LINES = 10_000;
 const BANNER_WAIT_MS = 2000;
 const BANNER_IDLE_MS = 500;
+export const DEFAULT_EXEC_MAX_LINES = 100;
+export const DEFAULT_READ_MAX_LINES = 80;
+export const DEFAULT_HISTORY_LIMIT = 100;
 const DEFAULT_WAIT_RETURN_MODE = 'tail';
 const DEFAULT_WAIT_TAIL_LINES = 50;
 
@@ -166,12 +169,12 @@ export class PtySession {
    * @param {object} opts
    * @param {string} opts.command
    * @param {number} [opts.timeout=30000]
-   * @param {number} [opts.maxLines=200]
+   * @param {number} [opts.maxLines=100]
    * @param {Function} [opts.sendNotification] - MCP sendNotification function for progress
    * @param {string|number} [opts.progressToken] - Progress token from client
    * @returns {Promise<{ output: string, exitCode: number|null, cwd: string|null, timedOut: boolean }>}
    */
-  async exec({ command, timeout = 30000, maxLines = 200, sendNotification, progressToken }) {
+  async exec({ command, timeout = 30000, maxLines = DEFAULT_EXEC_MAX_LINES, sendNotification, progressToken }) {
     if (this.busy) {
       throw new Error(`Session ${this.id} is busy with another command. Wait or use terminal_write for interactive input.`);
     }
@@ -236,10 +239,10 @@ export class PtySession {
    * @param {object} opts
    * @param {number} [opts.timeout=30000]
    * @param {number} [opts.idleTimeout=500]
-   * @param {number} [opts.maxLines=200]
+   * @param {number} [opts.maxLines=80]
    * @returns {Promise<{ output: string, timedOut: boolean }>}
    */
-  async read({ timeout = 30000, idleTimeout = 500, maxLines = 200 } = {}) {
+  async read({ timeout = 30000, idleTimeout = 500, maxLines = DEFAULT_READ_MAX_LINES } = {}) {
     if (!this.alive) {
       // Return whatever is left in buffer
       const leftover = stripAnsi(this._consumeUnreadBuffer()).trim();
@@ -389,10 +392,10 @@ export class PtySession {
    * Retrieve past output without consuming it.
    * @param {object} opts
    * @param {number} [opts.offset=0] - Lines to skip from the end (for pagination)
-   * @param {number} [opts.limit=200] - Max lines to return
+   * @param {number} [opts.limit=100] - Max lines to return
    * @returns {{ lines: string[], totalLines: number, returnedFrom: number, returnedTo: number }}
    */
-  getHistory({ offset = 0, limit = 200 } = {}) {
+  getHistory({ offset = 0, limit = DEFAULT_HISTORY_LIMIT } = {}) {
     const len = this._history.length;
     const end = Math.max(0, len - offset);
     const start = Math.max(0, end - limit);

@@ -1,4 +1,4 @@
-export const DEFAULT_PAGE_SIZE = 100;
+export const DEFAULT_PAGE_SIZE = 50;
 
 export function paginateOutput(text, { page = 0, pageSize = DEFAULT_PAGE_SIZE } = {}) {
   const normalizedPage = Math.max(0, page);

@@ -63,6 +63,20 @@ test('read returns unread buffered output once', async () => {
   assert.equal(second.output, '');
 });
 
+test('getHistory uses the lower default history limit', () => {
+  const session = createSession();
+  session._history = Array.from({ length: 120 }, (_, index) => `line ${index + 1}`);
+  session._historyTotalLines = 120;
+
+  const result = session.getHistory();
+
+  assert.equal(result.lines.length, 100);
+  assert.equal(result.lines[0], 'line 21');
+  assert.equal(result.lines.at(-1), 'line 120');
+  assert.equal(result.returnedFrom, 20);
+  assert.equal(result.returnedTo, 120);
+});
+
 test('waitForPattern returns only the tail by default', async () => {
   const session = createWaitSession('line 1\nline 2\nline 3\nready\n');
 
