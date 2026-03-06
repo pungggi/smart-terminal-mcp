@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { resolve as resolvePath } from 'node:path';
+import { statSync } from 'node:fs';
+import { delimiter, extname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { normalizeCommandName, parseCommandOutput } from './command-parsers.js';
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -8,6 +9,8 @@ const STRUCTURED_PARSER_HINT = 'Structured parser unavailable for this command s
 const PARSER_HINT_MIN_STDOUT_BYTES = 200;
 const PARSER_HINT_COMMANDS = new Set(['where', 'which']);
 const PARSER_HINT_GIT_SUBCOMMANDS = new Set(['branch', 'diff', 'log', 'remote', 'rev-parse', 'status']);
+const DEFAULT_WINDOWS_PATH_EXTENSIONS = ['.com', '.exe', '.bat', '.cmd'];
+const WINDOWS_BATCH_EXTENSIONS = new Set(['.bat', '.cmd']);
 
 export async function runCommand({
   cmd,
@@ -20,6 +23,7 @@ export async function runCommand({
 }) {
   const resolvedCwd = resolvePath(cwd ?? process.cwd());
   const startedAt = Date.now();
+  const spawnPlan = buildSpawnPlan({ cmd, args, cwd: resolvedCwd });
 
   return new Promise((resolve, reject) => {
     const stdoutChunks = [];
@@ -29,10 +33,11 @@ export async function runCommand({
     let maxOutputExceeded = false;
     let settled = false;
 
-    const child = spawn(cmd, args, {
+    const child = spawn(spawnPlan.command, spawnPlan.args, {
       cwd: resolvedCwd,
       shell: false,
       windowsHide: true,
+      windowsVerbatimArguments: spawnPlan.windowsVerbatimArguments,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -63,7 +68,7 @@ export async function runCommand({
       if (settled) return;
       settled = true;
       clearTimeout(timeoutId);
-      reject(new Error(`Failed to start command "${cmd}": ${err.message}`));
+      reject(new Error(formatStartError({ cmd, err })));
     });
 
     child.stdout?.on('data', (chunk) => appendChunk(stdoutChunks, chunk));
@@ -116,6 +121,124 @@ export async function runCommand({
       resolve(result);
     });
   });
+}
+
+function buildSpawnPlan({ cmd, args, cwd }) {
+  if (process.platform !== 'win32') {
+    return {
+      command: cmd,
+      args,
+      windowsVerbatimArguments: false,
+    };
+  }
+
+  const resolvedCommand = resolveWindowsCommand(cmd, cwd);
+  if (!resolvedCommand || !isWindowsBatchCommand(resolvedCommand)) {
+    return {
+      command: resolvedCommand ?? cmd,
+      args,
+      windowsVerbatimArguments: false,
+    };
+  }
+
+  return {
+    command: process.env.ComSpec || 'cmd.exe',
+    args: ['/d', '/s', '/c', formatWindowsBatchCommand(resolvedCommand, args)],
+    windowsVerbatimArguments: true,
+  };
+}
+
+function resolveWindowsCommand(cmd, cwd) {
+  const pathExts = getWindowsPathExtensions();
+  if (looksLikePath(cmd)) {
+    return findExistingCommandPath(buildPathCandidates(resolveWindowsPath(cmd, cwd), pathExts));
+  }
+
+  return findCommandOnPath(buildCommandCandidates(cmd, pathExts));
+}
+
+function getWindowsPathExtensions() {
+  const rawPathExt = process.env.PATHEXT;
+  if (!rawPathExt) return DEFAULT_WINDOWS_PATH_EXTENSIONS;
+
+  const pathExts = rawPathExt
+    .split(';')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  return pathExts.length > 0 ? pathExts : DEFAULT_WINDOWS_PATH_EXTENSIONS;
+}
+
+function buildPathCandidates(commandPath, pathExts) {
+  if (extname(commandPath)) return [commandPath];
+  return [...pathExts.map((pathExt) => `${commandPath}${pathExt}`), commandPath];
+}
+
+function buildCommandCandidates(cmd, pathExts) {
+  if (extname(cmd)) return [cmd];
+  return [...pathExts.map((pathExt) => `${cmd}${pathExt}`), cmd];
+}
+
+function findCommandOnPath(candidates) {
+  const rawPath = process.env.PATH ?? '';
+  const pathDirs = rawPath.split(delimiter).map((value) => value.trim()).filter(Boolean);
+  for (const pathDir of pathDirs) {
+    for (const candidate of candidates) {
+      const resolvedPath = join(pathDir, candidate);
+      if (isExistingFile(resolvedPath)) return resolvedPath;
+    }
+  }
+
+  return null;
+}
+
+function findExistingCommandPath(candidates) {
+  for (const candidate of candidates) {
+    if (isExistingFile(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+function resolveWindowsPath(cmd, cwd) {
+  if (isAbsolute(cmd)) return cmd;
+  return resolvePath(cwd, cmd);
+}
+
+function looksLikePath(cmd) {
+  return cmd.includes('\\') || cmd.includes('/') || cmd.startsWith('.');
+}
+
+function isExistingFile(filePath) {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isWindowsBatchCommand(cmd) {
+  return WINDOWS_BATCH_EXTENSIONS.has(extname(cmd).toLowerCase());
+}
+
+function formatWindowsBatchCommand(command, args) {
+  const parts = [quoteWindowsBatchArgument(command), ...args.map(quoteWindowsBatchArgument)];
+  return `"${parts.join(' ')}"`;
+}
+
+function quoteWindowsBatchArgument(value) {
+  const stringValue = String(value);
+  if (stringValue.length === 0) return '""';
+  return `"${stringValue.replace(/(["%^&|<>!()])/g, '^$1')}"`;
+}
+
+function formatStartError({ cmd, err }) {
+  const baseMessage = `Failed to start command "${cmd}": ${err.message}`;
+  if (process.platform !== 'win32' || err?.code !== 'ENOENT' || looksLikePath(cmd)) {
+    return baseMessage;
+  }
+
+  return `${baseMessage}. If this command should come from PATH, verify it is installed and visible to the server process. Shell built-ins such as dir or cd still require terminal_exec.`;
 }
 
 export function getStructuredParserHint({ cmd, args, ok, parseRequested, parsed, stdout }) {

@@ -291,9 +291,11 @@ export function registerTools(server, manager) {
   server.tool(
     'terminal_list',
     'List active terminal sessions.',
-    {},
-    async () => {
-      const sessions = manager.list();
+    {
+      verbose: z.boolean().default(true).describe('Include full metadata'),
+    },
+    async ({ verbose = true }) => {
+      const sessions = manager.list({ verbose });
       return jsonContent({ sessions, count: sessions.length });
     }
   );

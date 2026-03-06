@@ -1,6 +1,6 @@
 {
   "name": "smart-terminal-mcp",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "MCP PTY server providing AI agents with real interactive terminal access",
   "type": "module",
   "main": "src/index.js",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test",
-    "stable": "npm dist-tag add smart-terminal-mcp@1.1.2 stable"
+    "stable": "npm dist-tag add smart-terminal-mcp@1.1.7 stable"
   },
   "keywords": [
     "mcp",

@@ -20,15 +20,41 @@ function getDescription(schema) {
 test('terminal_list returns compact JSON content', async () => {
   const server = createFakeServer();
   const sessions = [{ id: 's1', cwd: 'C:/repo' }];
-  const manager = { list: () => sessions };
+  const listCalls = [];
+  const manager = {
+    list: (opts) => {
+      listCalls.push(opts);
+      return sessions;
+    },
+  };
 
   registerTools(server, manager);
 
   const result = await server.tools.get('terminal_list').handler({});
   const expected = { sessions, count: sessions.length };
 
+  assert.deepEqual(listCalls, [{ verbose: true }]);
   assert.equal(result.content[0].text, JSON.stringify(expected));
   assert.deepEqual(JSON.parse(result.content[0].text), expected);
+});
+
+test('terminal_list forwards verbose=false for minimal output', async () => {
+  const server = createFakeServer();
+  const sessions = [{ id: 's1', name: 'main', cwd: 'C:/repo', alive: true, busy: false }];
+  const listCalls = [];
+  const manager = {
+    list: (opts) => {
+      listCalls.push(opts);
+      return sessions;
+    },
+  };
+
+  registerTools(server, manager);
+
+  const result = await server.tools.get('terminal_list').handler({ verbose: false });
+
+  assert.deepEqual(listCalls, [{ verbose: false }]);
+  assert.deepEqual(JSON.parse(result.content[0].text), { sessions, count: 1 });
 });
 
 test('tools source does not pretty-print JSON responses', async () => {
@@ -65,6 +91,7 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalHistoryFormat: server.tools.get('terminal_get_history').schema.format.parse(undefined),
     terminalRunPagedPageSize: server.tools.get('terminal_run_paged').schema.pageSize.parse(undefined),
     terminalRunParseOnly: server.tools.get('terminal_run').schema.parseOnly.parse(undefined),
+    terminalListVerbose: server.tools.get('terminal_list').schema.verbose.parse(undefined),
   }, {
     terminalExecMaxLines: 200,
     terminalReadMaxLines: 200,
@@ -72,6 +99,7 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalHistoryFormat: 'lines',
     terminalRunPagedPageSize: 100,
     terminalRunParseOnly: false,
+    terminalListVerbose: true,
   });
 });
 

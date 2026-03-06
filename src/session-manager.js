@@ -78,10 +78,12 @@ export class SessionManager {
 
   /**
    * List all sessions.
+   * @param {object} [opts]
+   * @param {boolean} [opts.verbose=true]
    * @returns {object[]}
    */
-  list() {
-    return Array.from(this._sessions.values()).map((s) => s.getInfo());
+  list({ verbose = true } = {}) {
+    return Array.from(this._sessions.values()).map((session) => session.getInfo({ verbose }));
   }
 
   /**

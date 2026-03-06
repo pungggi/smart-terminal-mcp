@@ -125,7 +125,7 @@ Execute a command with deterministic completion detection.
 
 ### `terminal_run`
 
-Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Only real executables are supported; shell built-ins such as `dir` or `cd` are not.
+Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Shell built-ins such as `dir` or `cd` are not supported. On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|

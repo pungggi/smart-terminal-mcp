@@ -92,6 +92,29 @@ test('getHistory can return text mode with the same metadata', () => {
   });
 });
 
+test('getInfo can return minimal terminal_list metadata', () => {
+  const session = createSession();
+  session.id = 's1';
+  session.name = 'main';
+  session.cwd = 'C:/repo';
+  session.alive = true;
+  session.busy = false;
+  session.shell = 'pwsh';
+  session.shellType = 'powershell';
+  session.cols = 120;
+  session.rows = 30;
+  session.createdAt = Date.now() - 1000;
+  session.lastActivity = Date.now();
+
+  assert.deepEqual(session.getInfo({ verbose: false }), {
+    id: 's1',
+    name: 'main',
+    cwd: 'C:/repo',
+    alive: true,
+    busy: false,
+  });
+});
+
 test('waitForPattern returns only the tail by default', async () => {
   const session = createWaitSession('line 1\nline 2\nline 3\nready\n');
 

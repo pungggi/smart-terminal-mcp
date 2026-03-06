@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getStructuredParserHint, runCommand } from '../src/command-runner.js';
 
@@ -78,6 +80,78 @@ test('runCommand can omit raw output when parseOnly is enabled', async () => {
   assert.equal(result.stdout.raw, '');
   assert.ok(Array.isArray(result.stdout.parsed?.paths));
   assert.ok(result.stdout.parsed.paths.length > 0);
+});
+
+test('runCommand resolves .cmd wrappers from PATH on Windows', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-only behavior');
+    return;
+  }
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'smart-terminal-mcp-'));
+  const originalPath = process.env.PATH;
+  const originalPathExt = process.env.PATHEXT;
+
+  try {
+    await writeFile(join(tempDir, 'echo-wrapper.cmd'), '@echo off\r\necho %~1\r\n');
+    process.env.PATH = `${tempDir};${originalPath ?? ''}`;
+    process.env.PATHEXT = '.COM;.EXE;.BAT;.CMD';
+
+    const result = await runCommand({
+      cmd: 'echo-wrapper',
+      args: ['hello'],
+      parse: false,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout.raw, /hello/);
+  } finally {
+    process.env.PATH = originalPath;
+    process.env.PATHEXT = originalPathExt;
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('runCommand executes explicit .cmd files on Windows', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-only behavior');
+    return;
+  }
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'smart-terminal-mcp-'));
+
+  try {
+    const scriptPath = join(tempDir, 'args-wrapper.cmd');
+    await writeFile(scriptPath, '@echo off\r\necho [%~1]\r\n');
+
+    const result = await runCommand({
+      cmd: scriptPath,
+      args: ['hello world'],
+      parse: false,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout.raw, /\[hello world\]/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('runCommand adds a helpful ENOENT hint on Windows for PATH commands', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-only behavior');
+    return;
+  }
+
+  await assert.rejects(
+    runCommand({
+      cmd: '__smart_terminal_missing_command__',
+      parse: false,
+    }),
+    /verify it is installed and visible to the server process/
+  );
 });
 
 test('getStructuredParserHint returns a hint for large unmatched parser-worthy output', () => {

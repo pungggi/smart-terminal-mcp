@@ -371,18 +371,28 @@ export class PtySession {
 
   /**
    * Get session metadata for terminal_list.
+   * @param {object} [opts]
+   * @param {boolean} [opts.verbose=true]
    */
-  getInfo() {
-    return {
+  getInfo({ verbose = true } = {}) {
+    const baseInfo = {
       id: this.id,
       name: this.name,
-      shell: this.shell,
-      shellType: this.shellType,
       cwd: this.cwd,
-      cols: this.cols,
-      rows: this.rows,
       alive: this.alive,
       busy: this.busy,
+    };
+
+    if (!verbose) {
+      return baseInfo;
+    }
+
+    return {
+      ...baseInfo,
+      shell: this.shell,
+      shellType: this.shellType,
+      cols: this.cols,
+      rows: this.rows,
       createdAt: new Date(this.createdAt).toISOString(),
       lastActivity: new Date(this.lastActivity).toISOString(),
       idleSeconds: Math.round((Date.now() - this.lastActivity) / 1000),
