@@ -32,7 +32,7 @@ function jsonContent(payload) {
   return {
     content: [{
       type: 'text',
-      text: JSON.stringify(payload, null, 2),
+      text: JSON.stringify(payload),
     }],
   };
 }
@@ -70,18 +70,13 @@ export function registerTools(server, manager) {
     async ({ shell, cols, rows, cwd, name, env }) => {
       const session = await manager.create({ shell, cols, rows, cwd, name, env });
       const banner = await session.waitForBanner();
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            sessionId: session.id,
-            shell: session.shell,
-            shellType: session.shellType,
-            cwd: session.cwd,
-            banner: banner || '(no banner)',
-          }, null, 2),
-        }],
-      };
+      return jsonContent({
+        sessionId: session.id,
+        shell: session.shell,
+        shellType: session.shellType,
+        cwd: session.cwd,
+        banner: banner || '(no banner)',
+      });
     }
   );
 
@@ -104,12 +99,7 @@ export function registerTools(server, manager) {
         sendNotification: extra.sendNotification,
         progressToken: extra._meta?.progressToken,
       });
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(result, null, 2),
-        }],
-      };
+      return jsonContent(result);
     }
   );
 
@@ -189,12 +179,7 @@ export function registerTools(server, manager) {
         .replace(/\\n/g, '\n')
         .replace(/\\t/g, '\t');
       session.write(processed);
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ success: true, sessionId }),
-        }],
-      };
+      return jsonContent({ success: true, sessionId });
     }
   );
 
@@ -211,12 +196,7 @@ export function registerTools(server, manager) {
     async ({ sessionId, timeout, idleTimeout, maxLines }) => {
       const session = manager.get(sessionId);
       const result = await session.read({ timeout, idleTimeout, maxLines });
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(result, null, 2),
-        }],
-      };
+      return jsonContent(result);
     }
   );
 
@@ -232,12 +212,7 @@ export function registerTools(server, manager) {
     async ({ sessionId, offset, maxLines }) => {
       const session = manager.get(sessionId);
       const result = session.getHistory({ offset, limit: maxLines });
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ sessionId, ...result }, null, 2),
-        }],
-      };
+      return jsonContent({ sessionId, ...result });
     }
   );
 
@@ -253,12 +228,7 @@ export function registerTools(server, manager) {
     async ({ sessionId, cols, rows }) => {
       const session = manager.get(sessionId);
       session.resize(cols, rows);
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ success: true, cols, rows }),
-        }],
-      };
+      return jsonContent({ success: true, cols, rows });
     }
   );
 
@@ -273,12 +243,7 @@ export function registerTools(server, manager) {
     async ({ sessionId, key }) => {
       const session = manager.get(sessionId);
       session.sendKey(key);
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ success: true, key }),
-        }],
-      };
+      return jsonContent({ success: true, key });
     }
   );
 
@@ -299,12 +264,7 @@ export function registerTools(server, manager) {
         sendNotification: extra.sendNotification,
         progressToken: extra._meta?.progressToken,
       });
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(result, null, 2),
-        }],
-      };
+      return jsonContent(result);
     }
   );
 
@@ -317,12 +277,7 @@ export function registerTools(server, manager) {
     },
     async ({ sessionId }) => {
       manager.stop(sessionId);
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ success: true, message: `Session ${sessionId} stopped.` }),
-        }],
-      };
+      return jsonContent({ success: true, message: `Session ${sessionId} stopped.` });
     }
   );
 
@@ -333,12 +288,7 @@ export function registerTools(server, manager) {
     {},
     async () => {
       const sessions = manager.list();
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ sessions, count: sessions.length }, null, 2),
-        }],
-      };
+      return jsonContent({ sessions, count: sessions.length });
     }
   );
 
@@ -371,17 +321,12 @@ export function registerTools(server, manager) {
       }
 
       const size = Buffer.byteLength(content, encoding);
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            success: true,
-            path: absolutePath,
-            size,
-            append,
-          }, null, 2),
-        }],
-      };
+      return jsonContent({
+        success: true,
+        path: absolutePath,
+        size,
+        append,
+      });
     }
   );
 }
