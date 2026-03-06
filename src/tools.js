@@ -4,7 +4,6 @@ import { resolve, dirname } from 'node:path';
 import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, runCommand } from './command-runner.js';
 import { normalizeCommandName } from './command-parsers.js';
 import { DEFAULT_PAGE_SIZE, paginateOutput } from './pager.js';
-import { SUPPORTED_KEYS } from './pty-session.js';
 
 const FS_ERROR_MESSAGES = {
   EACCES: 'Permission denied',
@@ -58,14 +57,14 @@ export function registerTools(server, manager) {
   // --- terminal_start ---
   server.tool(
     'terminal_start',
-    'Start a new interactive terminal session. Returns session ID and shell banner.',
+    'Start a new interactive terminal session.',
     {
-      shell: z.string().optional().describe('Shell to use (e.g. "pwsh.exe", "cmd.exe", "bash"). Auto-detected if omitted.'),
+      shell: z.string().optional().describe('Shell'),
       cols: z.number().int().min(20).max(500).default(120).describe('Terminal width in columns'),
       rows: z.number().int().min(5).max(200).default(30).describe('Terminal height in rows'),
-      cwd: z.string().optional().describe('Working directory. Defaults to server CWD.'),
-      name: z.string().optional().describe('Optional friendly name for this session'),
-      env: z.record(z.string()).optional().describe('Custom environment variables to set for the session (e.g. { "TEST_ENV": "true", "API_KEY": "secret" })'),
+      cwd: z.string().optional().describe('Working directory'),
+      name: z.string().optional().describe('Session name'),
+      env: z.record(z.string()).optional().describe('Environment variables'),
     },
     async ({ shell, cols, rows, cwd, name, env }) => {
       const session = await manager.create({ shell, cols, rows, cwd, name, env });
@@ -83,12 +82,12 @@ export function registerTools(server, manager) {
   // --- terminal_exec ---
   server.tool(
     'terminal_exec',
-    'Execute a command and wait for it to complete (blocking). Returns clean output, exit code, and cwd. Only one command can run at a time per session — throws if session is busy.',
+    'Execute a command in a terminal session and wait for it to finish.',
     {
-      sessionId: z.string().describe('Session ID from terminal_start'),
+      sessionId: z.string().describe('Session ID'),
       command: z.string().describe('Command to execute'),
-      timeout: z.number().int().min(1000).max(600000).default(30000).describe('Timeout in ms (default 30s, max 10min)'),
-      maxLines: z.number().int().min(10).max(10000).default(200).describe('Max output lines. Excess is truncated to head+tail.'),
+      timeout: z.number().int().min(1000).max(600000).default(30000).describe('Timeout in ms'),
+      maxLines: z.number().int().min(10).max(10000).default(200).describe('Max output lines'),
     },
     async ({ sessionId, command, timeout, maxLines }, extra) => {
       const session = manager.get(sessionId);
@@ -106,14 +105,14 @@ export function registerTools(server, manager) {
   // --- terminal_run ---
   server.tool(
     'terminal_run',
-    'Run a one-shot non-interactive command using cmd + args with shell=false. Safer than terminal_exec for predictable automation. Supports structured parsing for a small set of read-only commands. Only real executables are supported; shell built-ins such as dir or cd are not.',
+    'Run a one-shot non-interactive command.',
     {
-      cmd: z.string().describe('Executable to run, such as "git", "tasklist", or an absolute path to a binary'),
-      args: z.array(z.string()).default([]).describe('Argument array passed directly to the executable (default: [])'),
-      cwd: z.string().optional().describe('Working directory. Defaults to the server CWD.'),
-      timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS).describe('Timeout in ms (default 30s, max 10min)'),
-      maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Maximum combined stdout/stderr bytes to capture before stopping the process (default 102400)'),
-      parse: z.boolean().default(true).describe('Attempt structured parsing for supported read-only commands (default: true)'),
+      cmd: z.string().describe('Executable'),
+      args: z.array(z.string()).default([]).describe('Arguments'),
+      cwd: z.string().optional().describe('Working directory'),
+      timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS).describe('Timeout in ms'),
+      maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Max output bytes'),
+      parse: z.boolean().default(true).describe('Parse structured output'),
     },
     async ({ cmd, args, cwd, timeout, maxOutputBytes, parse }) => {
       const result = await runCommand({ cmd, args, cwd, timeout, maxOutputBytes, parse });
@@ -124,15 +123,15 @@ export function registerTools(server, manager) {
   // --- terminal_run_paged ---
   server.tool(
     'terminal_run_paged',
-    'Run a read-only one-shot command using cmd + args with shell=false and return a single page of stdout lines. Structured parsing is disabled in paged mode because partial output is unsafe to parse.',
+    'Run a read-only command and return one page of output.',
     {
-      cmd: z.string().describe('Read-only executable to run, such as "git", "tasklist", "where", or "which"'),
-      args: z.array(z.string()).default([]).describe('Argument array passed directly to the executable (default: [])'),
-      cwd: z.string().optional().describe('Working directory. Defaults to the server CWD.'),
-      timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS).describe('Timeout in ms (default 30s, max 10min)'),
-      maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Maximum combined stdout/stderr bytes to capture before stopping the process (default 102400)'),
-      page: z.number().int().min(0).default(0).describe('0-indexed page number (default: 0)'),
-      pageSize: z.number().int().min(1).max(1000).default(DEFAULT_PAGE_SIZE).describe('Lines per page (default: 100)'),
+      cmd: z.string().describe('Executable'),
+      args: z.array(z.string()).default([]).describe('Arguments'),
+      cwd: z.string().optional().describe('Working directory'),
+      timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS).describe('Timeout in ms'),
+      maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Max output bytes'),
+      page: z.number().int().min(0).default(0).describe('Page number'),
+      pageSize: z.number().int().min(1).max(1000).default(DEFAULT_PAGE_SIZE).describe('Page size'),
     },
     async ({ cmd, args, cwd, timeout, maxOutputBytes, page, pageSize }) => {
       assertPagedCommandIsReadOnly(cmd, args);
@@ -166,10 +165,10 @@ export function registerTools(server, manager) {
   // --- terminal_write ---
   server.tool(
     'terminal_write',
-    'Write raw data to a terminal session (fire-and-forget, no output returned). Use for interactive programs (REPLs, prompts, etc). Must call terminal_read afterwards to get output.',
+    'Write raw data to a terminal session.',
     {
       sessionId: z.string().describe('Session ID'),
-      data: z.string().describe('Data to write. Use \\r for Enter, \\t for Tab.'),
+      data: z.string().describe('Data to write'),
     },
     async ({ sessionId, data }) => {
       const session = manager.get(sessionId);
@@ -186,11 +185,11 @@ export function registerTools(server, manager) {
   // --- terminal_read ---
   server.tool(
     'terminal_read',
-    'Read new output from a terminal session. Only captures output arriving after this call — does not return past output. Use terminal_get_history to retrieve earlier output. Returns when output stops arriving (idle detection).',
+    'Read new output from a terminal session.',
     {
       sessionId: z.string().describe('Session ID'),
       timeout: z.number().int().min(500).max(300000).default(30000).describe('Hard timeout in ms'),
-      idleTimeout: z.number().int().min(100).max(10000).default(500).describe('Idle timeout — return after this many ms of no new output'),
+      idleTimeout: z.number().int().min(100).max(10000).default(500).describe('Idle timeout in ms'),
       maxLines: z.number().int().min(10).max(10000).default(200).describe('Max output lines'),
     },
     async ({ sessionId, timeout, idleTimeout, maxLines }) => {
@@ -203,10 +202,10 @@ export function registerTools(server, manager) {
   // --- terminal_get_history ---
   server.tool(
     'terminal_get_history',
-    'Retrieve past terminal output without consuming it. Unlike terminal_read, this is non-destructive and returns historical output from a rolling buffer (last ~10,000 lines). Useful for reviewing output that was already read or missed.',
+    'Get past output from a terminal session.',
     {
       sessionId: z.string().describe('Session ID'),
-      offset: z.number().int().min(0).default(0).describe('Number of lines to skip from the end for pagination. offset=0 returns the most recent lines, offset=200 skips the last 200 lines to page backwards.'),
+      offset: z.number().int().min(0).default(0).describe('History offset'),
       maxLines: z.number().int().min(1).max(10000).default(200).describe('Max lines to return'),
     },
     async ({ sessionId, offset, maxLines }) => {
@@ -235,10 +234,10 @@ export function registerTools(server, manager) {
   // --- terminal_send_key ---
   server.tool(
     'terminal_send_key',
-    `Send a special key to the terminal. Supported keys: ${SUPPORTED_KEYS.join(', ')}`,
+    'Send a key to the terminal.',
     {
       sessionId: z.string().describe('Session ID'),
-      key: z.string().describe(`Key name: ${SUPPORTED_KEYS.join(', ')}`),
+      key: z.string().describe('Key name'),
     },
     async ({ sessionId, key }) => {
       const session = manager.get(sessionId);
@@ -250,10 +249,10 @@ export function registerTools(server, manager) {
   // --- terminal_wait ---
   server.tool(
     'terminal_wait',
-    'Wait until a specific pattern appears in the terminal output. Useful for waiting for servers to start, builds to complete, etc.',
+    'Wait for a pattern to appear in terminal output.',
     {
       sessionId: z.string().describe('Session ID'),
-      pattern: z.string().describe('String or regex pattern to wait for'),
+      pattern: z.string().describe('Pattern'),
       timeout: z.number().int().min(1000).max(600000).default(30000).describe('Timeout in ms'),
     },
     async ({ sessionId, pattern, timeout }, extra) => {
@@ -284,7 +283,7 @@ export function registerTools(server, manager) {
   // --- terminal_list ---
   server.tool(
     'terminal_list',
-    'List all active terminal sessions with metadata (ID, shell, cwd, idle time, etc).',
+    'List active terminal sessions.',
     {},
     async () => {
       const sessions = manager.list();
@@ -295,13 +294,13 @@ export function registerTools(server, manager) {
   // --- terminal_write_file ---
   server.tool(
     'terminal_write_file',
-    'Write content directly to a file on disk. Path is resolved relative to the session\'s current working directory. Safer and more robust than piping content through echo commands — handles special characters, newlines, and large files correctly. For binary files, pass base64-encoded content with encoding "base64".',
+    'Write content to a file.',
     {
-      sessionId: z.string().describe('Session ID (used to resolve working directory)'),
-      path: z.string().describe('File path (relative to session CWD, or absolute)'),
-      content: z.string().describe('File content to write. For binary files, pass base64-encoded string with encoding="base64".'),
-      encoding: z.enum(['utf-8', 'ascii', 'base64', 'hex', 'latin1']).default('utf-8').describe('File encoding. Use "base64" to decode base64 content into binary. (default: utf-8)'),
-      append: z.boolean().default(false).describe('Append to file instead of overwriting (default: false)'),
+      sessionId: z.string().describe('Session ID'),
+      path: z.string().describe('File path'),
+      content: z.string().describe('File content'),
+      encoding: z.enum(['utf-8', 'ascii', 'base64', 'hex', 'latin1']).default('utf-8').describe('File encoding'),
+      append: z.boolean().default(false).describe('Append mode'),
     },
     async ({ sessionId, path: filePath, content, encoding, append }) => {
       const session = manager.get(sessionId);
