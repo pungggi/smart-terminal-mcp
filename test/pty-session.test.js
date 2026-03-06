@@ -162,3 +162,31 @@ test('waitForPattern returns only the configured tail on timeout', async () => {
     timedOut: true,
   });
 });
+
+test('waitForPattern rejects invalid regex patterns', async () => {
+  const session = createWaitSession('ready\n');
+
+  await assert.rejects(
+    session.waitForPattern({ pattern: '(', timeout: 20 }),
+    /Invalid regex pattern in pattern/
+  );
+});
+
+test('_readUntilIdle collects streamed data even if the buffer shifts', async () => {
+  const session = createSession();
+  session._buffer = 'seed';
+  session._dataListeners = [];
+
+  const resultPromise = session._readUntilIdle(50, 10);
+  const onData = session._dataListeners.at(-1);
+
+  session._buffer = 'trimmed-1';
+  onData('first');
+  session._buffer = 'trimmed-2';
+  onData('second');
+
+  await assert.doesNotReject(async () => {
+    const result = await resultPromise;
+    assert.equal(result, 'firstsecond');
+  });
+});

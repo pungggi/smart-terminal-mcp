@@ -221,3 +221,74 @@ test('terminal_wait forwards returnMode and tailLines', async () => {
     timedOut: false,
   });
 });
+
+test('terminal_retry returns retry results as compact JSON', async () => {
+  const server = createFakeServer();
+  let calls = 0;
+  const manager = {
+    get: () => ({
+      exec: async (opts) => {
+        calls++;
+        assert.deepEqual(opts, { command: 'npm test', timeout: 1234, maxLines: 25 });
+        return { output: 'ok', exitCode: 0, cwd: 'C:/repo', timedOut: false };
+      },
+    }),
+  };
+
+  registerTools(server, manager);
+
+  const result = await server.tools.get('terminal_retry').handler({
+    sessionId: 's1',
+    command: 'npm test',
+    maxRetries: 0,
+    backoff: 'fixed',
+    delayMs: 1,
+    timeout: 1234,
+    maxLines: 25,
+    successExitCode: 0,
+    successPattern: null,
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    success: true,
+    attempts: 1,
+    lastResult: { output: 'ok', exitCode: 0, cwd: 'C:/repo', timedOut: false },
+    history: [{ attempt: 1, output: 'ok', exitCode: 0, cwd: 'C:/repo', timedOut: false }],
+  });
+});
+
+test('terminal_diff returns diff results as compact JSON', async () => {
+  const server = createFakeServer();
+  const execCalls = [];
+  const manager = {
+    get: () => ({
+      exec: async (opts) => {
+        execCalls.push(opts);
+        return execCalls.length === 1
+          ? { output: 'alpha', exitCode: 0, cwd: 'C:/repo', timedOut: false }
+          : { output: 'beta', exitCode: 0, cwd: 'C:/repo', timedOut: false };
+      },
+    }),
+  };
+
+  registerTools(server, manager);
+
+  const result = await server.tools.get('terminal_diff').handler({
+    sessionId: 's1',
+    commandA: 'type before.txt',
+    commandB: 'type after.txt',
+    timeout: 4321,
+    maxLines: 30,
+    contextLines: 2,
+  });
+
+  assert.deepEqual(execCalls, [
+    { command: 'type before.txt', timeout: 4321, maxLines: 30 },
+    { command: 'type after.txt', timeout: 4321, maxLines: 30 },
+  ]);
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.identical, false);
+  assert.match(payload.diff, /--- type before.txt/);
+  assert.match(payload.diff, /\+\+\+ type after.txt/);
+});

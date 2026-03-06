@@ -14,6 +14,8 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 - **Paged read-only output** -- `terminal_run_paged` returns a single page of stdout for large command output
 - **Special key support** -- Send Ctrl+C, Tab, arrow keys, etc. without knowing escape codes
 - **Pattern waiting** -- Wait for specific output (e.g. "server listening on port") before continuing
+- **Retry helper** -- Retry flaky terminal commands with bounded backoff and optional output matching
+- **Output diffing** -- Run two commands in one session and compare their outputs with a unified diff
 - **CWD tracking** -- Every `terminal_exec` response includes the current working directory
 - **Output truncation** -- Large outputs are automatically truncated to head + tail
 - **Session management** -- Named sessions, TTL auto-cleanup, max 10 concurrent sessions
@@ -221,6 +223,39 @@ Wait for a specific pattern in the output stream.
 
 **Returns**: `output`, `matched`, `timedOut` (`output` may be empty in `match-only` mode)
 
+### `terminal_retry`
+
+Retry a command in the same terminal session until it succeeds or retries are exhausted.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sessionId` | string | *required* | Session ID |
+| `command` | string | *required* | Command to execute |
+| `maxRetries` | number | 3 | Retry count after the first attempt |
+| `backoff` | string | `"exponential"` | Backoff mode: `fixed`, `linear`, `exponential` |
+| `delayMs` | number | 1000 | Base delay in ms |
+| `timeout` | number | 30000 | Timeout per attempt in ms |
+| `maxLines` | number | 200 | Max output lines per attempt |
+| `successExitCode` | number or `null` | 0 | Exit code required for success |
+| `successPattern` | string or `null` | `null` | Optional regex that must match output |
+
+**Returns**: `success`, `attempts`, `lastResult`, `history`
+
+### `terminal_diff`
+
+Run two commands in the same terminal session and return a bounded unified diff of their outputs.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sessionId` | string | *required* | Session ID |
+| `commandA` | string | *required* | Baseline command |
+| `commandB` | string | *required* | Comparison command |
+| `timeout` | number | 30000 | Timeout per command in ms |
+| `maxLines` | number | 200 | Max output lines per command |
+| `contextLines` | number | 3 | Diff context lines |
+
+**Returns**: `resultA`, `resultB`, `diff`, `identical`
+
 ### `terminal_resize`
 
 Resize terminal dimensions.
@@ -306,16 +341,32 @@ terminal_wait({ sessionId, pattern: "listening on port", timeout: 60000 })
 terminal_wait({ sessionId, pattern: "listening on port", returnMode: "full" })
 ```
 
+### Retry a flaky command
+
+```
+terminal_retry({ sessionId, command: "npm test", maxRetries: 2, backoff: "fixed", delayMs: 1000 })
+-> { success: true, attempts: 2, lastResult: { output: "...", exitCode: 0, cwd: "...", timedOut: false } }
+```
+
+### Diff two command outputs
+
+```
+terminal_diff({ sessionId, commandA: "git show HEAD~1:README.md", commandB: "type README.md" })
+-> { identical: false, diff: "--- git show HEAD~1:README.md\n+++ type README.md\n@@ @@\n..." }
+```
+
 ## Architecture
 
 ```
 src/
   index.js            Entry point, server bootstrap, graceful shutdown
-  tools.js            13 MCP tool registrations with Zod schemas
+  tools.js            MCP tool registrations with Zod schemas
   command-runner.js   One-shot non-interactive command execution (shell=false)
   command-parsers.js  Structured parsers for supported read-only commands
   pager.js            Line-based pagination helper for large stdout
   pty-session.js      PTY session: marker injection, idle read, buffer mgmt
+  smart-tools.js      Retry and diff helpers for higher-level terminal tools
+  regex-utils.js      Shared user-regex validation and compilation
   session-manager.js  Session lifecycle, TTL cleanup, concurrency limits
   shell-detector.js   Cross-platform shell auto-detection
   ansi.js             ANSI escape code stripping

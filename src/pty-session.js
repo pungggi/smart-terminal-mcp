@@ -2,6 +2,7 @@ import * as pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
 import { platform } from 'node:os';
 import { stripAnsi } from './ansi.js';
+import { compileUserRegex } from './regex-utils.js';
 import { getShellType } from './shell-detector.js';
 
 const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB
@@ -284,7 +285,7 @@ export class PtySession {
       throw new Error(`Session ${this.id} is no longer alive.`);
     }
 
-    const regex = new RegExp(pattern);
+    const regex = compileUserRegex(pattern);
     const startTime = Date.now();
     let collected = '';
     let lastProgressAt = 0;
@@ -530,7 +531,7 @@ export class PtySession {
    */
   _readUntilIdle(timeout, idleTimeout) {
     return new Promise((resolve) => {
-      const startBuffer = this._buffer;
+      let collected = '';
       let idleTimer;
       let resolved = false;
 
@@ -544,9 +545,8 @@ export class PtySession {
       };
 
       const done = () => {
-        const result = this._buffer.slice(startBuffer.length);
         cleanup();
-        resolve(result);
+        resolve(collected);
       };
 
       const hardTimer = setTimeout(done, timeout);
@@ -556,7 +556,8 @@ export class PtySession {
         idleTimer = setTimeout(done, idleTimeout);
       };
 
-      const onData = () => {
+      const onData = (data) => {
+        collected += data;
         resetIdle();
       };
 

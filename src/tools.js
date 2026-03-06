@@ -5,6 +5,7 @@ import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, runCommand } from './comm
 import { normalizeCommandName, summarizeCommandOutput } from './command-parsers.js';
 import { DEFAULT_PAGE_SIZE, paginateOutput } from './pager.js';
 import { DEFAULT_EXEC_MAX_LINES, DEFAULT_HISTORY_FORMAT, DEFAULT_HISTORY_LIMIT, DEFAULT_READ_MAX_LINES } from './pty-session.js';
+import { execAndDiff, execWithRetry } from './smart-tools.js';
 
 const FS_ERROR_MESSAGES = {
   EACCES: 'Permission denied',
@@ -50,7 +51,7 @@ function assertPagedCommandIsReadOnly(cmd, args = []) {
 }
 
 /**
- * Register all 13 MCP tools on the server.
+ * Register all MCP tools on the server.
  * @param {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer} server
  * @param {import('./session-manager.js').SessionManager} manager
  */
@@ -276,6 +277,56 @@ export function registerTools(server, manager) {
         sendNotification: extra.sendNotification,
         progressToken: extra._meta?.progressToken,
       });
+      return jsonContent(result);
+    }
+  );
+
+  // --- terminal_retry ---
+  server.tool(
+    'terminal_retry',
+    'Retry a command with backoff.',
+    {
+      sessionId: z.string().describe('Session ID'),
+      command: z.string().describe('Command'),
+      maxRetries: z.number().int().min(0).max(10).default(3).describe('Retry count'),
+      backoff: z.enum(['fixed', 'exponential', 'linear']).default('exponential').describe('Backoff mode'),
+      delayMs: z.number().int().min(10).max(60000).default(1000).describe('Delay in ms'),
+      timeout: z.number().int().min(1000).max(600000).default(30000).describe('Timeout in ms'),
+      maxLines: z.number().int().min(10).max(10000).default(DEFAULT_EXEC_MAX_LINES).describe('Max output lines'),
+      successExitCode: z.number().int().nullable().default(0).describe('Success exit code'),
+      successPattern: z.string().nullable().default(null).describe('Output regex'),
+    },
+    async ({ sessionId, command, maxRetries, backoff, delayMs, timeout, maxLines, successExitCode, successPattern }) => {
+      const session = manager.get(sessionId);
+      const result = await execWithRetry(session, {
+        command,
+        maxRetries,
+        backoff,
+        delayMs,
+        timeout,
+        maxLines,
+        successExitCode,
+        successPattern,
+      });
+      return jsonContent(result);
+    }
+  );
+
+  // --- terminal_diff ---
+  server.tool(
+    'terminal_diff',
+    'Run two commands and return a unified diff.',
+    {
+      sessionId: z.string().describe('Session ID'),
+      commandA: z.string().describe('Baseline command'),
+      commandB: z.string().describe('Comparison command'),
+      timeout: z.number().int().min(1000).max(600000).default(30000).describe('Timeout in ms'),
+      maxLines: z.number().int().min(10).max(10000).default(DEFAULT_EXEC_MAX_LINES).describe('Max output lines'),
+      contextLines: z.number().int().min(0).max(20).default(3).describe('Diff context lines'),
+    },
+    async ({ sessionId, commandA, commandB, timeout, maxLines, contextLines }) => {
+      const session = manager.get(sessionId);
+      const result = await execAndDiff(session, { commandA, commandB, timeout, maxLines, contextLines });
       return jsonContent(result);
     }
   );
