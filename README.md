@@ -1,15 +1,15 @@
 # smart-terminal-mcp
 
-A Windows-native MCP server that gives AI agents (Claude, Cursor, etc.) real interactive terminal access via pseudo-terminals ([node-pty](https://github.com/microsoft/node-pty)).
+A PTY-based MCP server with strong Windows support that gives AI agents (Claude, Cursor, etc.) interactive terminal access via pseudo-terminals ([node-pty](https://github.com/microsoft/node-pty)).
 
-Unlike simple `exec`-based approaches, this provides full PTY sessions with bidirectional communication, enabling interactive CLI tools, incremental terminal reads, and proper terminal emulation.
+Unlike simple `exec`-based approaches, this provides full PTY sessions with bidirectional communication, enabling interactive CLI tools, incremental terminal reads, and PTY-backed terminal behavior.
 
 ## Features
 
-- **Marker-based completion detection** -- 100% reliable command completion via unique markers injected into the shell
-- **Robust command echo removal** -- Pre-command marker ensures clean output, handles shell aliases and expansions correctly
+- **Marker-based completion detection** -- Deterministic command completion via unique markers injected into the shell
+- **Robust command echo removal** -- Pre-command marker helps keep output clean even with shell aliases and expansions
 - **Interactive mode** -- `terminal_write` + `terminal_read` for REPLs, prompts, and interactive programs
-- **Safe one-shot commands** -- `terminal_run` executes real binaries with `cmd + args` and `shell=false`
+- **Safer one-shot commands** -- `terminal_run` executes real binaries with `cmd + args` and `shell=false`
 - **Structured parsers** -- Supported read-only commands can return both `stdout.raw` and `stdout.parsed`
 - **Paged read-only output** -- `terminal_run_paged` returns a single page of stdout for large command output
 - **Special key support** -- Send Ctrl+C, Tab, arrow keys, etc. without knowing escape codes
@@ -17,11 +17,11 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 - **Retry helper** -- Retry flaky terminal commands with bounded backoff and optional output matching
 - **Output diffing** -- Run two commands in one session and compare their outputs with a unified diff
 - **CWD tracking** -- Every `terminal_exec` response includes the current working directory
-- **Output truncation** -- Large outputs are automatically truncated to head + tail
+- **Output truncation** -- `terminal_exec` and `terminal_read` truncate large outputs to head + tail
 - **Session management** -- Named sessions, TTL auto-cleanup, max 10 concurrent sessions
-- **Anti-blocking** -- Disables pagers (`GIT_PAGER=cat`, `PAGER=cat`), suppresses PowerShell progress output, and sets UTF-8 for `cmd.exe` on Windows
+- **Blocking mitigations** -- Disables pagers (`GIT_PAGER=cat`, `PAGER=cat`), suppresses PowerShell progress output, and sets UTF-8 for `cmd.exe` on Windows
 - **Best-effort progress notifications** -- Emits MCP `notifications/progress` for long-running `terminal_exec` / `terminal_wait` calls when the client provides a progress token and surfaces those notifications
-- **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` or `bash`
+- **Shell auto-detection** -- Windows: `pwsh.exe` > `powershell.exe` > `cmd.exe`. Linux/macOS: `$SHELL` > `bash` > `sh`
 
 Progress notifications are not the same as full stdout streaming: they currently send periodic status updates for `terminal_exec` and `terminal_wait`, typically based on elapsed time and the latest output line. Whether you actually see them depends on your MCP client.
 
@@ -108,7 +108,7 @@ Start a new interactive terminal session.
 
 ### `terminal_exec`
 
-Execute a command with deterministic completion detection. If the MCP client sends a `progressToken`, long-running calls may also emit best-effort `notifications/progress` updates.
+Execute a command with deterministic completion detection. Large outputs are truncated to head + tail based on `maxLines`. If the MCP client sends a `progressToken`, long-running calls may also emit best-effort `notifications/progress` updates.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -121,7 +121,7 @@ Execute a command with deterministic completion detection. If the MCP client sen
 
 ### `terminal_run`
 
-Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Shell built-ins such as `dir` or `cd` are not supported. On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed.
+Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Output is capped by `maxOutputBytes` rather than head + tail truncation. Shell built-ins such as `dir` or `cd` are not supported. On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -138,7 +138,7 @@ Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Sa
 
 ### `terminal_run_paged`
 
-Run a read-only one-shot command using `cmd + args` with `shell=false` and return a single page of stdout lines. Paged mode does not parse partial output, but it can return a concise summary for supported read-only commands when `summary: true`.
+Run a read-only one-shot command using `cmd + args` with `shell=false` and return a single page of stdout lines. This uses paging rather than head + tail truncation. Paged mode does not parse partial output, but it can return a concise summary for supported read-only commands when `summary: true`.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -164,7 +164,7 @@ Write raw data to a terminal (for interactive programs). Follow with `terminal_r
 
 ### `terminal_read`
 
-Read buffered output with idle detection.
+Read buffered output with idle detection. Large outputs are truncated to head + tail based on `maxLines`.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -203,7 +203,7 @@ Send a named special key.
 
 ### `terminal_wait`
 
-Wait for a specific pattern in the output stream. If the MCP client sends a `progressToken`, long-running waits may also emit best-effort `notifications/progress` updates.
+Wait for a specific pattern in the output stream. By default, responses return only the last `tailLines`; use `returnMode: "full"` for the full matched output or `"match-only"` to suppress output entirely. If the MCP client sends a `progressToken`, long-running waits may also emit best-effort `notifications/progress` updates.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|

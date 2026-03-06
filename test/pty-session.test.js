@@ -99,6 +99,16 @@ test('_parseOutput ignores echoed wrapper text and keeps real output', () => {
   });
 });
 
+test('_truncateOutput keeps the head and tail when output exceeds maxLines', () => {
+  const session = createSession();
+  const output = ['line 1', 'line 2', 'line 3', 'line 4', 'line 5', 'line 6'].join('\n');
+
+  assert.equal(
+    session._truncateOutput(output, 4),
+    ['line 1', 'line 2', '', '... 2 lines omitted ...', '', 'line 5', 'line 6'].join('\n')
+  );
+});
+
 test('read returns unread buffered output once', async () => {
   const session = createSession();
   session.alive = true;
