@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
+import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, runCommand } from './command-runner.js';
+import { normalizeCommandName } from './command-parsers.js';
+import { DEFAULT_PAGE_SIZE, paginateOutput } from './pager.js';
 import { SUPPORTED_KEYS } from './pty-session.js';
 
 const FS_ERROR_MESSAGES = {
@@ -12,6 +15,8 @@ const FS_ERROR_MESSAGES = {
   ENAMETOOLONG: 'File name too long',
   EISDIR: 'Path is a directory, not a file',
 };
+const READ_ONLY_PAGED_COMMANDS = new Set(['tasklist', 'where', 'which']);
+const READ_ONLY_GIT_SUBCOMMANDS = new Set(['branch', 'diff', 'log', 'status']);
 
 /**
  * Format a filesystem error into a human-readable message with the error code.
@@ -23,8 +28,29 @@ function formatFsError(err) {
   return hint ? `${hint} (${err.code})` : err.message;
 }
 
+function jsonContent(payload) {
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify(payload, null, 2),
+    }],
+  };
+}
+
+function assertPagedCommandIsReadOnly(cmd, args = []) {
+  const commandName = normalizeCommandName(cmd);
+  if (READ_ONLY_PAGED_COMMANDS.has(commandName)) return;
+
+  if (commandName === 'git') {
+    const subcommand = args[0]?.toLowerCase();
+    if (READ_ONLY_GIT_SUBCOMMANDS.has(subcommand)) return;
+  }
+
+  throw new Error('terminal_run_paged only supports read-only commands: git (branch, diff, log, status), tasklist, where, which.');
+}
+
 /**
- * Register all 11 MCP tools on the server.
+ * Register all 13 MCP tools on the server.
  * @param {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer} server
  * @param {import('./session-manager.js').SessionManager} manager
  */
@@ -84,6 +110,66 @@ export function registerTools(server, manager) {
           text: JSON.stringify(result, null, 2),
         }],
       };
+    }
+  );
+
+  // --- terminal_run ---
+  server.tool(
+    'terminal_run',
+    'Run a one-shot non-interactive command using cmd + args with shell=false. Safer than terminal_exec for predictable automation. Supports structured parsing for a small set of read-only commands. Only real executables are supported; shell built-ins such as dir or cd are not.',
+    {
+      cmd: z.string().describe('Executable to run, such as "git", "tasklist", or an absolute path to a binary'),
+      args: z.array(z.string()).default([]).describe('Argument array passed directly to the executable (default: [])'),
+      cwd: z.string().optional().describe('Working directory. Defaults to the server CWD.'),
+      timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS).describe('Timeout in ms (default 30s, max 10min)'),
+      maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Maximum combined stdout/stderr bytes to capture before stopping the process (default 102400)'),
+      parse: z.boolean().default(true).describe('Attempt structured parsing for supported read-only commands (default: true)'),
+    },
+    async ({ cmd, args, cwd, timeout, maxOutputBytes, parse }) => {
+      const result = await runCommand({ cmd, args, cwd, timeout, maxOutputBytes, parse });
+      return jsonContent(result);
+    }
+  );
+
+  // --- terminal_run_paged ---
+  server.tool(
+    'terminal_run_paged',
+    'Run a read-only one-shot command using cmd + args with shell=false and return a single page of stdout lines. Structured parsing is disabled in paged mode because partial output is unsafe to parse.',
+    {
+      cmd: z.string().describe('Read-only executable to run, such as "git", "tasklist", "where", or "which"'),
+      args: z.array(z.string()).default([]).describe('Argument array passed directly to the executable (default: [])'),
+      cwd: z.string().optional().describe('Working directory. Defaults to the server CWD.'),
+      timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS).describe('Timeout in ms (default 30s, max 10min)'),
+      maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Maximum combined stdout/stderr bytes to capture before stopping the process (default 102400)'),
+      page: z.number().int().min(0).default(0).describe('0-indexed page number (default: 0)'),
+      pageSize: z.number().int().min(1).max(1000).default(DEFAULT_PAGE_SIZE).describe('Lines per page (default: 100)'),
+    },
+    async ({ cmd, args, cwd, timeout, maxOutputBytes, page, pageSize }) => {
+      assertPagedCommandIsReadOnly(cmd, args);
+
+      const result = await runCommand({
+        cmd,
+        args,
+        cwd,
+        timeout,
+        maxOutputBytes,
+        parse: false,
+      });
+      const pagination = paginateOutput(result.stdout.raw, { page, pageSize });
+
+      return jsonContent({
+        ...result,
+        stdout: {
+          raw: pagination.pageText,
+          parsed: null,
+        },
+        pageInfo: {
+          page: pagination.page,
+          pageSize: pagination.pageSize,
+          totalLines: pagination.totalLines,
+          hasNext: pagination.hasNext,
+        },
+      });
     }
   );
 

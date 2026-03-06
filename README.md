@@ -9,6 +9,9 @@ Unlike simple `exec`-based approaches, this provides full PTY sessions with bidi
 - **Marker-based completion detection** -- 100% reliable command completion via unique markers injected into the shell
 - **Robust command echo removal** -- Pre-command marker ensures clean output, handles shell aliases and expansions correctly
 - **Interactive mode** -- `terminal_write` + `terminal_read` for REPLs, prompts, and interactive programs
+- **Safe one-shot commands** -- `terminal_run` executes real binaries with `cmd + args` and `shell=false`
+- **Structured parsers** -- Supported read-only commands can return both `stdout.raw` and `stdout.parsed`
+- **Paged read-only output** -- `terminal_run_paged` returns a single page of stdout for large command output
 - **Special key support** -- Send Ctrl+C, Tab, arrow keys, etc. without knowing escape codes
 - **Pattern waiting** -- Wait for specific output (e.g. "server listening on port") before continuing
 - **CWD tracking** -- Every `terminal_exec` response includes the current working directory
@@ -120,6 +123,37 @@ Execute a command with deterministic completion detection.
 
 **Returns**: `output`, `exitCode`, `cwd`, `timedOut`
 
+### `terminal_run`
+
+Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Only real executables are supported; shell built-ins such as `dir` or `cd` are not.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cmd` | string | *required* | Executable to run |
+| `args` | string[] | `[]` | Argument array passed directly to the executable |
+| `cwd` | string | server CWD | Working directory |
+| `timeout` | number | 30000 | Timeout in ms |
+| `maxOutputBytes` | number | 102400 | Max combined stdout/stderr bytes to capture |
+| `parse` | boolean | `true` | Attempt structured parsing for supported commands |
+
+**Returns**: `ok`, `cmd`, `args`, `cwd`, `exitCode`, `timedOut`, `durationMs`, `stdout.raw`, `stdout.parsed`, `stderr.raw`
+
+### `terminal_run_paged`
+
+Run a read-only one-shot command using `cmd + args` with `shell=false` and return a single page of stdout lines. Paged mode does not parse partial output.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cmd` | string | *required* | Read-only executable to run |
+| `args` | string[] | `[]` | Argument array passed directly to the executable |
+| `cwd` | string | server CWD | Working directory |
+| `timeout` | number | 30000 | Timeout in ms |
+| `maxOutputBytes` | number | 102400 | Max combined stdout/stderr bytes to capture |
+| `page` | number | 0 | 0-indexed page number |
+| `pageSize` | number | 100 | Lines per page |
+
+**Returns**: Same envelope as `terminal_run`, plus `pageInfo.page`, `pageInfo.pageSize`, `pageInfo.totalLines`, `pageInfo.hasNext`
+
 ### `terminal_write`
 
 Write raw data to a terminal (for interactive programs). Follow with `terminal_read`.
@@ -222,6 +256,20 @@ terminal_start()                           -> { sessionId: "a1b2c3d4" }
 terminal_exec({ sessionId, command: "ls -la" })  -> { output: "...", exitCode: 0, cwd: "/home/user" }
 ```
 
+### Run a safe one-shot command
+
+```
+terminal_run({ cmd: "git", args: ["status", "--porcelain=v1", "--branch"] })
+-> { ok: true, stdout: { raw: "...", parsed: { branch: {...}, staged: [], modified: [], untracked: [] } } }
+```
+
+### Page through large read-only output
+
+```
+terminal_run_paged({ cmd: "git", args: ["log", "--oneline"], page: 0, pageSize: 50 })
+-> { ok: true, stdout: { raw: "...", parsed: null }, pageInfo: { totalLines: 120, hasNext: true } }
+```
+
 ### Interactive Python REPL
 
 ```
@@ -246,12 +294,26 @@ terminal_wait({ sessionId, pattern: "listening on port", timeout: 60000 })
 ```
 src/
   index.js            Entry point, server bootstrap, graceful shutdown
-  tools.js            11 MCP tool registrations with Zod schemas
+  tools.js            13 MCP tool registrations with Zod schemas
+  command-runner.js   One-shot non-interactive command execution (shell=false)
+  command-parsers.js  Structured parsers for supported read-only commands
+  pager.js            Line-based pagination helper for large stdout
   pty-session.js      PTY session: marker injection, idle read, buffer mgmt
   session-manager.js  Session lifecycle, TTL cleanup, concurrency limits
   shell-detector.js   Cross-platform shell auto-detection
   ansi.js             ANSI escape code stripping
 ```
+
+### Structured parser support
+
+`terminal_run` currently parses a small set of read-only command signatures:
+
+- `git log --oneline`
+- `git status --porcelain=v1 --branch`
+- `tasklist /fo csv /nh`
+- `where <name>` / `which <name>`
+
+Unsupported commands still return `stdout.raw`; `stdout.parsed` is `null`.
 
 ## License
 
