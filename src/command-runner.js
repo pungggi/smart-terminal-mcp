@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { delimiter, extname, isAbsolute, join, resolve as resolvePath } from 'node:path';
-import { normalizeCommandName, parseCommandOutput } from './command-parsers.js';
+import { normalizeCommandName, parseCommandOutput, summarizeCommandOutput } from './command-parsers.js';
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024;
@@ -20,6 +20,7 @@ export async function runCommand({
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
   parse = true,
   parseOnly = false,
+  summary = false,
 }) {
   const resolvedCwd = resolvePath(cwd ?? process.cwd());
   const startedAt = Date.now();
@@ -100,9 +101,18 @@ export async function runCommand({
 
       if (signal) result.signal = signal;
       if (maxOutputExceeded) result.maxOutputExceeded = true;
-      const parseRequested = parse || parseOnly;
+      const parseRequested = parse || parseOnly || summary;
       if (parseRequested && !timedOut && !maxOutputExceeded) {
         result.stdout.parsed = parseCommandOutput({ cmd, args, stdout: stdoutRaw });
+        if (summary && result.stdout.parsed) {
+          const stdoutSummary = summarizeCommandOutput({ cmd, args, parsed: result.stdout.parsed });
+          if (stdoutSummary) {
+            result.stdout.summary = stdoutSummary;
+            result.stdout.parsed = null;
+            result.stdout.raw = '';
+          }
+        }
+
         if (parseOnly && result.stdout.parsed) {
           result.stdout.raw = '';
         }

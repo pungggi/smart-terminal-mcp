@@ -15,17 +15,61 @@ export function parseCommandOutput({ cmd, args = [], stdout }) {
   return null;
 }
 
+export function summarizeCommandOutput({ cmd, args = [], parsed }) {
+  if (!parsed) return null;
+
+  const name = normalizeCommandName(cmd);
+  if (name === 'git') return summarizeGitCommandOutput(args, parsed);
+  if (name === 'tasklist' && Array.isArray(parsed.processes)) {
+    return { processCount: parsed.processes.length };
+  }
+  if ((name === 'where' || name === 'which') && Array.isArray(parsed.paths)) {
+    return { pathCount: parsed.paths.length };
+  }
+
+  return null;
+}
+
 function parseGitCommandOutput(args, stdout) {
   if (isGitLogOneline(args)) return parseGitLogOneline(stdout);
   if (isGitStatusPorcelain(args)) return parseGitStatusPorcelain(stdout);
   if (isGitBranchVerbose(args)) return parseGitBranchVerbose(stdout);
   if (isGitBranchList(args)) return parseGitBranchList(stdout);
   if (isGitBranchShowCurrent(args)) return parseGitBranchShowCurrent(stdout);
+  if (isGitRevParseShowToplevel(args)) return parseGitTopLevel(stdout);
+  if (isGitRevParseIsInsideWorkTree(args)) return parseGitBooleanValue(stdout, 'isInsideWorkTree');
   if (isGitRevParseAbbrevRefHead(args)) return parseGitBranchShowCurrent(stdout);
+  if (isGitDiffShortStat(args)) return parseGitDiffShortStat(stdout);
   if (isGitDiffStat(args)) return parseGitDiffStat(stdout);
   if (isGitDiffNameStatus(args)) return parseGitDiffNameStatus(stdout);
   if (isGitDiffNameOnly(args)) return parsePathList(stdout);
+  if (isGitLsFiles(args)) return parsePathList(stdout);
   if (isGitRemoteVerbose(args)) return parseGitRemoteVerbose(stdout);
+  return null;
+}
+
+function summarizeGitCommandOutput(args, parsed) {
+  const subcommand = args[0]?.toLowerCase();
+  if (subcommand === 'log' && Array.isArray(parsed.commits)) {
+    return {
+      commitCount: parsed.commits.length,
+      ...(parsed.commits[0] ? { latestCommit: parsed.commits[0] } : {}),
+    };
+  }
+  if (subcommand === 'status') return summarizeGitStatus(parsed);
+  if (subcommand === 'branch') return summarizeGitBranches(parsed);
+  if (subcommand === 'rev-parse') return parsed;
+  if (subcommand === 'diff') return summarizeGitDiff(parsed);
+  if (subcommand === 'ls-files' && Array.isArray(parsed.paths)) {
+    return { pathCount: parsed.paths.length };
+  }
+  if (subcommand === 'remote' && Array.isArray(parsed.remotes)) {
+    return {
+      remoteCount: parsed.remotes.length,
+      names: parsed.remotes.map((remote) => remote.name),
+    };
+  }
+
   return null;
 }
 
@@ -75,6 +119,22 @@ function isGitRevParseAbbrevRefHead(args) {
     && args[2].toUpperCase() === 'HEAD';
 }
 
+function isGitRevParseShowToplevel(args) {
+  return args.length === 2
+    && args[0] === 'rev-parse'
+    && args[1].toLowerCase() === '--show-toplevel';
+}
+
+function isGitRevParseIsInsideWorkTree(args) {
+  return args.length === 2
+    && args[0] === 'rev-parse'
+    && args[1].toLowerCase() === '--is-inside-work-tree';
+}
+
+function isGitDiffShortStat(args) {
+  return args[0] === 'diff' && args.slice(1).some((arg) => arg.toLowerCase() === '--shortstat');
+}
+
 function isGitDiffStat(args) {
   return args[0] === 'diff' && args.slice(1).some((arg) => arg.toLowerCase() === '--stat');
 }
@@ -91,6 +151,10 @@ function isGitRemoteVerbose(args) {
   return args[0] === 'remote'
     && args.length === 2
     && ['-v', '--verbose'].includes(args[1].toLowerCase());
+}
+
+function isGitLsFiles(args) {
+  return args[0] === 'ls-files' && args.slice(1).every((arg) => arg.startsWith('-'));
 }
 
 function isTasklistCsv(args) {
@@ -170,6 +234,23 @@ function parseGitBranchShowCurrent(stdout) {
   return current ? { current } : null;
 }
 
+function parseGitTopLevel(stdout) {
+  const topLevel = stdout.trim();
+  return topLevel ? { topLevel } : null;
+}
+
+function parseGitBooleanValue(stdout, key) {
+  const value = stdout.trim().toLowerCase();
+  if (value === 'true') return { [key]: true };
+  if (value === 'false') return { [key]: false };
+  return null;
+}
+
+function parseGitDiffShortStat(stdout) {
+  const summary = parseGitDiffStatSummary(stdout.trim());
+  return summary ? { summary } : null;
+}
+
 function parseGitDiffStat(stdout) {
   const lines = stdout.split(/\r?\n/).filter(Boolean);
   if (lines.length === 0) return null;
@@ -212,6 +293,50 @@ function parseGitRemoteVerbose(stdout) {
 
   const remotes = Array.from(remotesByName.values());
   return remotes.length > 0 ? { remotes } : null;
+}
+
+function summarizeGitStatus(parsed) {
+  const summary = {
+    stagedCount: parsed.staged?.length ?? 0,
+    modifiedCount: parsed.modified?.length ?? 0,
+    untrackedCount: parsed.untracked?.length ?? 0,
+  };
+
+  if (parsed.branch?.head) summary.branch = parsed.branch.head;
+  if (parsed.branch?.upstream) summary.upstream = parsed.branch.upstream;
+  if (typeof parsed.branch?.ahead === 'number') summary.ahead = parsed.branch.ahead;
+  if (typeof parsed.branch?.behind === 'number') summary.behind = parsed.branch.behind;
+
+  return summary;
+}
+
+function summarizeGitBranches(parsed) {
+  if (typeof parsed.current === 'string') return { current: parsed.current };
+  if (!Array.isArray(parsed.branches)) return null;
+
+  const current = parsed.branches.find((branch) => branch.current)?.name;
+  return {
+    branchCount: parsed.branches.length,
+    ...(current ? { current } : {}),
+  };
+}
+
+function summarizeGitDiff(parsed) {
+  if (parsed.summary) return parsed.summary;
+  if (Array.isArray(parsed.paths)) return { pathCount: parsed.paths.length };
+  if (Array.isArray(parsed.files)) return { fileCount: parsed.files.length };
+  if (!Array.isArray(parsed.changes)) return null;
+
+  const statuses = parsed.changes.reduce((accumulator, change) => {
+    const key = change.status;
+    accumulator[key] = (accumulator[key] ?? 0) + 1;
+    return accumulator;
+  }, {});
+
+  return {
+    changeCount: parsed.changes.length,
+    statuses,
+  };
 }
 
 function parseGitBranch(value) {

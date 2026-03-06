@@ -91,6 +91,8 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalHistoryFormat: server.tools.get('terminal_get_history').schema.format.parse(undefined),
     terminalRunPagedPageSize: server.tools.get('terminal_run_paged').schema.pageSize.parse(undefined),
     terminalRunParseOnly: server.tools.get('terminal_run').schema.parseOnly.parse(undefined),
+    terminalRunSummary: server.tools.get('terminal_run').schema.summary.parse(undefined),
+    terminalRunPagedSummary: server.tools.get('terminal_run_paged').schema.summary.parse(undefined),
     terminalListVerbose: server.tools.get('terminal_list').schema.verbose.parse(undefined),
   }, {
     terminalExecMaxLines: 200,
@@ -99,8 +101,50 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalHistoryFormat: 'lines',
     terminalRunPagedPageSize: 100,
     terminalRunParseOnly: false,
+    terminalRunSummary: false,
+    terminalRunPagedSummary: false,
     terminalListVerbose: true,
   });
+});
+
+test('terminal_run forwards summary mode for concise output', async () => {
+  const server = createFakeServer();
+  const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
+
+  registerTools(server, {});
+
+  const result = await server.tools.get('terminal_run').handler({
+    cmd: lookupCommand,
+    args: [lookupCommand],
+    parse: false,
+    summary: true,
+  });
+
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.stdout.raw, '');
+  assert.equal(payload.stdout.parsed, null);
+  assert.ok(payload.stdout.summary.pathCount > 0);
+});
+
+test('terminal_run_paged can return summaries for read-only commands', async () => {
+  const server = createFakeServer();
+  const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
+
+  registerTools(server, {});
+
+  const result = await server.tools.get('terminal_run_paged').handler({
+    cmd: lookupCommand,
+    args: [lookupCommand],
+    page: 0,
+    pageSize: 5,
+    summary: true,
+  });
+
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.stdout.raw, '');
+  assert.equal(payload.stdout.parsed, null);
+  assert.ok(payload.stdout.summary.pathCount > 0);
+  assert.ok(payload.pageInfo.totalLines > 0);
 });
 
 test('terminal_get_history forwards format and returns text payloads', async () => {

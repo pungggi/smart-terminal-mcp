@@ -82,6 +82,35 @@ test('runCommand can omit raw output when parseOnly is enabled', async () => {
   assert.ok(result.stdout.parsed.paths.length > 0);
 });
 
+test('runCommand can return concise summaries for supported commands', async () => {
+  const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
+  const result = await runCommand({
+    cmd: lookupCommand,
+    args: [lookupCommand],
+    parse: false,
+    summary: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout.raw, '');
+  assert.equal(result.stdout.parsed, null);
+  assert.ok(result.stdout.summary?.pathCount > 0);
+});
+
+test('runCommand keeps raw output when summary mode has no supported parser', async () => {
+  const result = await runCommand({
+    cmd: process.execPath,
+    args: ['-e', 'process.stdout.write("hello")'],
+    parse: false,
+    summary: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout.raw, 'hello');
+  assert.equal(result.stdout.parsed, null);
+  assert.equal(result.stdout.summary, undefined);
+});
+
 test('runCommand resolves .cmd wrappers from PATH on Windows', async (t) => {
   if (process.platform !== 'win32') {
     t.skip('Windows-only behavior');

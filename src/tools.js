@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, runCommand } from './command-runner.js';
-import { normalizeCommandName } from './command-parsers.js';
+import { normalizeCommandName, summarizeCommandOutput } from './command-parsers.js';
 import { DEFAULT_PAGE_SIZE, paginateOutput } from './pager.js';
 import { DEFAULT_EXEC_MAX_LINES, DEFAULT_HISTORY_FORMAT, DEFAULT_HISTORY_LIMIT, DEFAULT_READ_MAX_LINES } from './pty-session.js';
 
@@ -16,7 +16,7 @@ const FS_ERROR_MESSAGES = {
   EISDIR: 'Path is a directory, not a file',
 };
 const READ_ONLY_PAGED_COMMANDS = new Set(['tasklist', 'where', 'which']);
-const READ_ONLY_GIT_SUBCOMMANDS = new Set(['branch', 'diff', 'log', 'status']);
+const READ_ONLY_GIT_SUBCOMMANDS = new Set(['branch', 'diff', 'log', 'ls-files', 'remote', 'rev-parse', 'status']);
 
 /**
  * Format a filesystem error into a human-readable message with the error code.
@@ -46,7 +46,7 @@ function assertPagedCommandIsReadOnly(cmd, args = []) {
     if (READ_ONLY_GIT_SUBCOMMANDS.has(subcommand)) return;
   }
 
-  throw new Error('terminal_run_paged only supports read-only commands: git (branch, diff, log, status), tasklist, where, which.');
+  throw new Error('terminal_run_paged only supports read-only commands: git (branch, diff, log, ls-files, remote, rev-parse, status), tasklist, where, which.');
 }
 
 /**
@@ -115,9 +115,10 @@ export function registerTools(server, manager) {
       maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Max output bytes'),
       parse: z.boolean().default(true).describe('Parse structured output'),
       parseOnly: z.boolean().default(false).describe('Drop raw when parsed'),
+      summary: z.boolean().default(false).describe('Return concise summary'),
     },
-    async ({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly }) => {
-      const result = await runCommand({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly });
+    async ({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly, summary }) => {
+      const result = await runCommand({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly, summary });
       return jsonContent(result);
     }
   );
@@ -134,8 +135,9 @@ export function registerTools(server, manager) {
       maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Max output bytes'),
       page: z.number().int().min(0).default(0).describe('Page number'),
       pageSize: z.number().int().min(1).max(1000).default(DEFAULT_PAGE_SIZE).describe('Page size'),
+      summary: z.boolean().default(false).describe('Return concise summary'),
     },
-    async ({ cmd, args, cwd, timeout, maxOutputBytes, page, pageSize }) => {
+    async ({ cmd, args, cwd, timeout, maxOutputBytes, page, pageSize, summary }) => {
       assertPagedCommandIsReadOnly(cmd, args);
 
       const result = await runCommand({
@@ -144,15 +146,19 @@ export function registerTools(server, manager) {
         cwd,
         timeout,
         maxOutputBytes,
-        parse: false,
+        parse: summary,
       });
       const pagination = paginateOutput(result.stdout.raw, { page, pageSize });
+      const stdoutSummary = summary
+        ? summarizeCommandOutput({ cmd, args, parsed: result.stdout.parsed })
+        : null;
 
       return jsonContent({
         ...result,
         stdout: {
-          raw: pagination.pageText,
+          raw: stdoutSummary ? '' : pagination.pageText,
           parsed: null,
+          ...(stdoutSummary ? { summary: stdoutSummary } : {}),
         },
         pageInfo: {
           page: pagination.page,

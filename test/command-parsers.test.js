@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeCommandName, parseCommandOutput } from '../src/command-parsers.js';
+import { normalizeCommandName, parseCommandOutput, summarizeCommandOutput } from '../src/command-parsers.js';
 
 test('normalizeCommandName removes executable extensions', () => {
   assert.equal(normalizeCommandName('C:\\Windows\\System32\\where.exe'), 'where');
@@ -160,6 +160,26 @@ test('parseCommandOutput parses git rev-parse --abbrev-ref HEAD', () => {
   assert.deepEqual(parsed, { current: 'main' });
 });
 
+test('parseCommandOutput parses git rev-parse --show-toplevel', () => {
+  const parsed = parseCommandOutput({
+    cmd: 'git',
+    args: ['rev-parse', '--show-toplevel'],
+    stdout: 'C:/repo\n',
+  });
+
+  assert.deepEqual(parsed, { topLevel: 'C:/repo' });
+});
+
+test('parseCommandOutput parses git rev-parse --is-inside-work-tree', () => {
+  const parsed = parseCommandOutput({
+    cmd: 'git',
+    args: ['rev-parse', '--is-inside-work-tree'],
+    stdout: 'true\n',
+  });
+
+  assert.deepEqual(parsed, { isInsideWorkTree: true });
+});
+
 test('parseCommandOutput parses git diff --name-only', () => {
   const parsed = parseCommandOutput({
     cmd: 'git',
@@ -199,6 +219,22 @@ test('parseCommandOutput parses git diff --stat', () => {
       { path: 'src/index.js', changes: 2, histogram: '+-' },
       { path: 'README.md', changes: 3, histogram: '++-' },
     ],
+    summary: {
+      filesChanged: 2,
+      insertions: 3,
+      deletions: 2,
+    },
+  });
+});
+
+test('parseCommandOutput parses git diff --shortstat', () => {
+  const parsed = parseCommandOutput({
+    cmd: 'git',
+    args: ['diff', '--shortstat'],
+    stdout: ' 2 files changed, 3 insertions(+), 2 deletions(-)\n',
+  });
+
+  assert.deepEqual(parsed, {
     summary: {
       filesChanged: 2,
       insertions: 3,
@@ -255,6 +291,40 @@ test('parseCommandOutput parses where or which output as paths', () => {
       'C:\\Program Files\\Git\\bin\\git.exe',
       'C:\\Windows\\System32\\git.exe',
     ],
+  });
+});
+
+test('parseCommandOutput parses git ls-files as paths', () => {
+  const parsed = parseCommandOutput({
+    cmd: 'git',
+    args: ['ls-files'],
+    stdout: 'src/index.js\nREADME.md\n',
+  });
+
+  assert.deepEqual(parsed, {
+    paths: ['src/index.js', 'README.md'],
+  });
+});
+
+test('summarizeCommandOutput returns counts for supported parsed output', () => {
+  const summary = summarizeCommandOutput({
+    cmd: 'git',
+    args: ['status', '--short'],
+    parsed: {
+      branch: { head: 'main', upstream: 'origin/main', ahead: 1 },
+      staged: ['staged.txt'],
+      modified: ['modified.txt'],
+      untracked: ['new.txt'],
+    },
+  });
+
+  assert.deepEqual(summary, {
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 1,
+    stagedCount: 1,
+    modifiedCount: 1,
+    untrackedCount: 1,
   });
 });
 

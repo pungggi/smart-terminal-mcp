@@ -136,12 +136,13 @@ Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Sa
 | `maxOutputBytes` | number | 102400 | Max combined stdout/stderr bytes to capture |
 | `parse` | boolean | `true` | Attempt structured parsing for supported commands |
 | `parseOnly` | boolean | `false` | Drop raw stdout if parsed |
+| `summary` | boolean | `false` | Return a concise summary when supported |
 
-**Returns**: `ok`, `cmd`, `args`, `cwd`, `exitCode`, `timedOut`, `durationMs`, `stdout.raw`, `stdout.parsed`, `stderr.raw`, optional `hint`
+**Returns**: `ok`, `cmd`, `args`, `cwd`, `exitCode`, `timedOut`, `durationMs`, `stdout.raw`, `stdout.parsed`, optional `stdout.summary`, `stderr.raw`, optional `hint`
 
 ### `terminal_run_paged`
 
-Run a read-only one-shot command using `cmd + args` with `shell=false` and return a single page of stdout lines. Paged mode does not parse partial output.
+Run a read-only one-shot command using `cmd + args` with `shell=false` and return a single page of stdout lines. Paged mode does not parse partial output, but it can return a concise summary for supported read-only commands when `summary: true`.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -152,6 +153,7 @@ Run a read-only one-shot command using `cmd + args` with `shell=false` and retur
 | `maxOutputBytes` | number | 102400 | Max combined stdout/stderr bytes to capture |
 | `page` | number | 0 | 0-indexed page number |
 | `pageSize` | number | 100 | Lines per page |
+| `summary` | boolean | `false` | Return a concise summary when supported |
 
 **Returns**: Same envelope as `terminal_run`, plus `pageInfo.page`, `pageInfo.pageSize`, `pageInfo.totalLines`, `pageInfo.hasNext`
 
@@ -331,14 +333,22 @@ src/
 - `git branch -vv`
 - `git branch --show-current`
 - `git rev-parse --abbrev-ref HEAD`
+- `git rev-parse --show-toplevel`
+- `git rev-parse --is-inside-work-tree`
 - `git diff --name-only`
 - `git diff --name-status`
 - `git diff --stat`
+- `git diff --shortstat`
+- `git ls-files`
 - `git remote -v`
 - `tasklist /fo csv /nh`
 - `where <name>` / `which <name>`
 
 Set `parseOnly: true` to omit `stdout.raw` when a supported parser succeeds. Unsupported commands still return `stdout.raw`; `stdout.parsed` is `null`.
+
+Set `summary: true` to return `stdout.summary` and suppress `stdout.raw` for supported command signatures. If no summary is available, raw stdout is preserved.
+
+`terminal_run_paged` supports `summary: true` for read-only commands: `git` (`branch`, `diff`, `log`, `ls-files`, `remote`, `rev-parse`, `status`), `tasklist`, `where`, and `which`.
 
 When parsing was requested but no parser matched, `terminal_run` may include a short `hint` for parser-worthy command signatures with larger raw output:
 - currently limited to `git` plus `where` / `which`
