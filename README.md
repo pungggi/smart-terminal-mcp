@@ -76,16 +76,18 @@ Add to your `claude_desktop_config.json`:
 claude mcp add smart-terminal -- npx -y smart-terminal-mcp@stable
 ```
 
-### Cursor
+### Augment Code
 
-Add to your Cursor MCP settings:
+Add to your Augment MCP settings:
 
 ```json
 {
   "mcpServers": {
-    "smart-terminal": {
+    "Smart Terminal": {
       "command": "npx",
-      "args": ["-y", "smart-terminal-mcp@stable"]
+      "args": [
+        "smart-terminal-mcp@stable"
+      ]
     }
   }
 }
