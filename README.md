@@ -10,10 +10,8 @@ Install this if you want a more consistent terminal workflow across different AI
 
 This MCP is most useful when you want:
 
-- **The same workflow across multiple agent platforms** -- If you move between Claude Code, Cursor, Trae, Antigravity, or other MCP-capable clients, the terminal tools stay the same.
-- **Less client-specific behavior** -- Prompts, instructions, and habits do not need to depend as much on one client's terminal UI or quirks.
-- **Reusable prompts, playbooks, and instructions** -- A workflow built around tools like `terminal_wait`, `terminal_retry`, `terminal_run_paged`, or `terminal_get_history` is easier to reuse across teams and clients.
-- **Reusable tooling with less lock-in** -- The terminal layer lives in MCP tools rather than in one client's built-in terminal behavior.
+- **Portable workflow across clients** -- The same terminal tools and habits work across Claude Code, Cursor, Trae, Antigravity, and other MCP-capable clients.
+- **Reusable prompts and tooling** -- Workflows built around tools like `terminal_wait`, `terminal_retry`, `terminal_run_paged`, and `terminal_get_history` are easier to reuse across teams and clients, with less lock-in to one client's terminal behavior.
 - **Persistent terminal state** -- Keep the same shell session alive across steps, including the current folder, environment, and running processes.
 - **Better interactive behavior** -- Handle prompts, REPLs, dev servers, Ctrl+C, arrow keys, and other real terminal interactions.
 - **More control over large output** -- Truncate, page, diff, retry, wait for patterns, or fetch history instead of dumping everything at once.
