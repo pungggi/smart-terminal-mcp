@@ -117,9 +117,24 @@ export function registerTools(server, manager) {
       parse: z.boolean().default(true).describe('Parse structured output'),
       parseOnly: z.boolean().default(false).describe('Drop raw when parsed'),
       summary: z.boolean().default(false).describe('Return concise summary'),
+      successExitCode: z.number().int().nullable().default(0).describe('Required exit code'),
+      successFile: z.string().optional().describe('File checked for success'),
+      successFilePattern: z.string().optional().describe('Regex for success file'),
     },
-    async ({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly, summary }) => {
-      const result = await runCommand({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly, summary });
+    async ({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly, summary, successExitCode, successFile, successFilePattern }) => {
+      const result = await runCommand({
+        cmd,
+        args,
+        cwd,
+        timeout,
+        maxOutputBytes,
+        parse,
+        parseOnly,
+        summary,
+        successExitCode,
+        successFile,
+        successFilePattern,
+      });
       return jsonContent(result);
     }
   );

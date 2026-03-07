@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerTools } from '../src/tools.js';
 
 function createFakeServer() {
@@ -92,6 +94,7 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalRunPagedPageSize: server.tools.get('terminal_run_paged').schema.pageSize.parse(undefined),
     terminalRunParseOnly: server.tools.get('terminal_run').schema.parseOnly.parse(undefined),
     terminalRunSummary: server.tools.get('terminal_run').schema.summary.parse(undefined),
+    terminalRunSuccessExitCode: server.tools.get('terminal_run').schema.successExitCode.parse(undefined),
     terminalRunPagedSummary: server.tools.get('terminal_run_paged').schema.summary.parse(undefined),
     terminalListVerbose: server.tools.get('terminal_list').schema.verbose.parse(undefined),
   }, {
@@ -102,6 +105,7 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalRunPagedPageSize: 100,
     terminalRunParseOnly: false,
     terminalRunSummary: false,
+    terminalRunSuccessExitCode: 0,
     terminalRunPagedSummary: false,
     terminalListVerbose: true,
   });
@@ -124,6 +128,33 @@ test('terminal_run forwards summary mode for concise output', async () => {
   assert.equal(payload.stdout.raw, '');
   assert.equal(payload.stdout.parsed, null);
   assert.ok(payload.stdout.summary.pathCount > 0);
+});
+
+test('terminal_run can re-evaluate success from a file pattern', async () => {
+  const server = createFakeServer();
+
+  registerTools(server, {});
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'smart-terminal-mcp-'));
+  try {
+    const result = await server.tools.get('terminal_run').handler({
+      cmd: process.execPath,
+      cwd: tempDir,
+      args: ['-e', 'require("node:fs").writeFileSync("build.log", "BUILD FAILED\\n")'],
+      parse: false,
+      successFile: 'build.log',
+      successFilePattern: 'BUILD OK',
+    });
+
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.exitCode, 0);
+    assert.equal(payload.checks.exitCode.ok, true);
+    assert.equal(payload.checks.successFile.matched, false);
+    assert.equal(payload.checks.successFile.path, join(tempDir, 'build.log'));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('terminal_run_paged can return summaries for read-only commands', async () => {

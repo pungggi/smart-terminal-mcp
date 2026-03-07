@@ -97,6 +97,99 @@ test('runCommand can return concise summaries for supported commands', async () 
   assert.ok(result.stdout.summary?.pathCount > 0);
 });
 
+test('runCommand can use a custom successExitCode', async () => {
+  const result = await runCommand({
+    cmd: process.execPath,
+    args: ['-e', 'process.exit(3)'],
+    parse: false,
+    successExitCode: 3,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exitCode, 3);
+  assert.deepEqual(result.checks, {
+    exitCode: {
+      ok: true,
+      expected: 3,
+      actual: 3,
+    },
+  });
+});
+
+test('runCommand can require a success file pattern', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'smart-terminal-mcp-'));
+
+  try {
+    const result = await runCommand({
+      cmd: process.execPath,
+      cwd: tempDir,
+      args: ['-e', 'require("node:fs").writeFileSync("build.log", "BUILD OK\\n")'],
+      parse: false,
+      successFile: 'build.log',
+      successFilePattern: 'BUILD OK',
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(result.checks, {
+      exitCode: {
+        ok: true,
+        expected: 0,
+        actual: 0,
+      },
+      successFile: {
+        path: join(tempDir, 'build.log'),
+        matched: true,
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('runCommand marks ok=false when success file pattern does not match', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'smart-terminal-mcp-'));
+
+  try {
+    const result = await runCommand({
+      cmd: process.execPath,
+      cwd: tempDir,
+      args: ['-e', 'require("node:fs").writeFileSync("build.log", "BUILD FAILED\\n")'],
+      parse: false,
+      successFile: 'build.log',
+      successFilePattern: 'BUILD OK',
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(result.checks, {
+      exitCode: {
+        ok: true,
+        expected: 0,
+        actual: 0,
+      },
+      successFile: {
+        path: join(tempDir, 'build.log'),
+        matched: false,
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('runCommand requires successFile and successFilePattern together', async () => {
+  await assert.rejects(
+    runCommand({
+      cmd: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+      parse: false,
+      successFile: 'build.log',
+    }),
+    /successFile and successFilePattern/
+  );
+});
+
 test('runCommand keeps raw output when summary mode has no supported parser', async () => {
   const result = await runCommand({
     cmd: process.execPath,

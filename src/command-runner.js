@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import { delimiter, extname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { normalizeCommandName, parseCommandOutput, summarizeCommandOutput } from './command-parsers.js';
+import { compileUserRegex } from './regex-utils.js';
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024;
@@ -21,7 +23,11 @@ export async function runCommand({
   parse = true,
   parseOnly = false,
   summary = false,
+  successExitCode = 0,
+  successFile,
+  successFilePattern,
 }) {
+  assertSuccessChecksAreValid({ successFile, successFilePattern });
   const resolvedCwd = resolvePath(cwd ?? process.cwd());
   const startedAt = Date.now();
   const spawnPlan = buildSpawnPlan({ cmd, args, cwd: resolvedCwd });
@@ -75,62 +81,142 @@ export async function runCommand({
     child.stdout?.on('data', (chunk) => appendChunk(stdoutChunks, chunk));
     child.stderr?.on('data', (chunk) => appendChunk(stderrChunks, chunk));
 
-    child.on('close', (exitCode, signal) => {
+    child.on('close', async (exitCode, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutId);
 
-      const stdoutRaw = Buffer.concat(stdoutChunks).toString('utf8');
-      const stderrRaw = Buffer.concat(stderrChunks).toString('utf8');
-      const result = {
-        ok: exitCode === 0 && !timedOut && !maxOutputExceeded,
-        cmd,
-        args,
-        cwd: resolvedCwd,
-        exitCode: exitCode ?? null,
-        timedOut,
-        durationMs: Date.now() - startedAt,
-        stdout: {
-          raw: stdoutRaw,
-          parsed: null,
-        },
-        stderr: {
-          raw: stderrRaw,
-        },
-      };
+      try {
+        const stdoutRaw = Buffer.concat(stdoutChunks).toString('utf8');
+        const stderrRaw = Buffer.concat(stderrChunks).toString('utf8');
+        const checks = await evaluateSuccessChecks({
+          exitCode,
+          cwd: resolvedCwd,
+          maxOutputBytes,
+          successExitCode,
+          successFile,
+          successFilePattern,
+        });
+        const result = {
+          ok: checks.ok && !timedOut && !maxOutputExceeded,
+          cmd,
+          args,
+          cwd: resolvedCwd,
+          exitCode: exitCode ?? null,
+          timedOut,
+          durationMs: Date.now() - startedAt,
+          stdout: {
+            raw: stdoutRaw,
+            parsed: null,
+          },
+          stderr: {
+            raw: stderrRaw,
+          },
+        };
 
-      if (signal) result.signal = signal;
-      if (maxOutputExceeded) result.maxOutputExceeded = true;
-      const parseRequested = parse || parseOnly || summary;
-      if (parseRequested && !timedOut && !maxOutputExceeded) {
-        result.stdout.parsed = parseCommandOutput({ cmd, args, stdout: stdoutRaw });
-        if (summary && result.stdout.parsed) {
-          const stdoutSummary = summarizeCommandOutput({ cmd, args, parsed: result.stdout.parsed });
-          if (stdoutSummary) {
-            result.stdout.summary = stdoutSummary;
-            result.stdout.parsed = null;
+        if (signal) result.signal = signal;
+        if (maxOutputExceeded) result.maxOutputExceeded = true;
+        if (shouldIncludeSuccessChecks({ successExitCode, successFile })) {
+          result.checks = checks.details;
+        }
+
+        const parseRequested = parse || parseOnly || summary;
+        if (parseRequested && !timedOut && !maxOutputExceeded) {
+          result.stdout.parsed = parseCommandOutput({ cmd, args, stdout: stdoutRaw });
+          if (summary && result.stdout.parsed) {
+            const stdoutSummary = summarizeCommandOutput({ cmd, args, parsed: result.stdout.parsed });
+            if (stdoutSummary) {
+              result.stdout.summary = stdoutSummary;
+              result.stdout.parsed = null;
+              result.stdout.raw = '';
+            }
+          }
+
+          if (parseOnly && result.stdout.parsed) {
             result.stdout.raw = '';
           }
         }
 
-        if (parseOnly && result.stdout.parsed) {
-          result.stdout.raw = '';
-        }
+        const hint = getStructuredParserHint({
+          cmd,
+          args,
+          ok: result.ok,
+          parseRequested,
+          parsed: result.stdout.parsed,
+          stdout: stdoutRaw,
+        });
+        if (hint) result.hint = hint;
+
+        resolve(result);
+      } catch (error) {
+        reject(error);
       }
-
-      const hint = getStructuredParserHint({
-        cmd,
-        args,
-        ok: result.ok,
-        parseRequested,
-        parsed: result.stdout.parsed,
-        stdout: stdoutRaw,
-      });
-      if (hint) result.hint = hint;
-
-      resolve(result);
     });
   });
+}
+
+function assertSuccessChecksAreValid({ successFile, successFilePattern }) {
+  const hasSuccessFile = typeof successFile === 'string' && successFile.length > 0;
+  const hasSuccessFilePattern = typeof successFilePattern === 'string' && successFilePattern.length > 0;
+  if (hasSuccessFile === hasSuccessFilePattern) return;
+  throw new Error('successFile and successFilePattern must be provided together.');
+}
+
+function shouldIncludeSuccessChecks({ successExitCode, successFile }) {
+  return successExitCode !== 0 || successFile !== undefined;
+}
+
+async function evaluateSuccessChecks({
+  exitCode,
+  cwd,
+  maxOutputBytes,
+  successExitCode,
+  successFile,
+  successFilePattern,
+}) {
+  const exitCodeOk = successExitCode === null || exitCode === successExitCode;
+  const details = {
+    exitCode: {
+      ok: exitCodeOk,
+      expected: successExitCode,
+      actual: exitCode ?? null,
+    },
+  };
+
+  let successFileOk = true;
+  if (successFile) {
+    const filePath = resolvePath(cwd, successFile);
+    const successRegex = compileUserRegex(successFilePattern, 'successFilePattern');
+    const fileCheck = { path: filePath, matched: false };
+    try {
+      const fileStats = statSync(filePath);
+      if (!fileStats.isFile()) {
+        fileCheck.error = 'Path is not a file.';
+        successFileOk = false;
+      } else if (fileStats.size > maxOutputBytes) {
+        fileCheck.error = `File exceeds maxOutputBytes (${maxOutputBytes}).`;
+        successFileOk = false;
+      } else {
+        const fileContents = await readFile(filePath, 'utf8');
+        fileCheck.matched = successRegex.test(fileContents);
+        successFileOk = fileCheck.matched;
+      }
+    } catch (error) {
+      fileCheck.error = formatFileCheckError(error);
+      successFileOk = false;
+    }
+    details.successFile = fileCheck;
+  }
+
+  return {
+    ok: exitCodeOk && successFileOk,
+    details,
+  };
+}
+
+function formatFileCheckError(error) {
+  if (error?.code) return `${error.message} (${error.code})`;
+  return error?.message ?? String(error);
 }
 
 function buildSpawnPlan({ cmd, args, cwd }) {

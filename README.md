@@ -13,7 +13,7 @@ This MCP is most useful when you want:
 - **Portable workflow across clients** -- The same terminal tools and habits work across Claude Code, Cursor, Trae, Antigravity, and other MCP-capable clients.
 - **Reusable prompts and tooling** -- Workflows built around tools like `terminal_wait`, `terminal_retry`, `terminal_run_paged`, and `terminal_get_history` are easier to reuse across teams and clients, with less lock-in to one client's terminal behavior.
 - **Persistent terminal state** -- Keep the same shell session alive across steps, including the current folder, environment, and running processes.
-- **Better interactive behavior** -- Handle prompts, REPLs, dev servers, Ctrl+C, arrow keys, and other interactive terminal behavior.
+- **Better interactive behavior** -- Safely handle tools that expect TTY behavior—such as `vim`, `npm` prompts, or interactive installers that often hang on standard piped stdin. Support full interactive sessions with REPLs, Ctrl+C, arrow keys, and dynamic prompts.
 - **More control over large output** -- Truncate, page, diff, retry, wait for patterns, or fetch history instead of dumping everything at once.
 - **More predictable automation** -- Use deterministic completion markers instead of guessing when a command is done.
 
@@ -161,7 +161,7 @@ Execute a command with deterministic completion detection. Large outputs are tru
 
 ### `terminal_run`
 
-Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Output is capped by `maxOutputBytes` rather than head + tail truncation. Shell built-ins such as `dir` or `cd` are not supported. On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed. Prefer passing the target executable directly as `cmd` instead of wrapping it in `powershell -Command` or `cmd /c`, especially when Windows paths contain spaces.
+Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Output is capped by `maxOutputBytes` rather than head + tail truncation. Shell built-ins such as `dir` or `cd` are not supported. On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed. Prefer passing the target executable directly as `cmd` instead of wrapping it in `powershell -Command` or `cmd /c`, especially when Windows paths contain spaces. For tools that always exit `0`, you can require a specific exit code and/or validate a success regex against a file written by the command.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -173,8 +173,11 @@ Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Sa
 | `parse` | boolean | `true` | Attempt structured parsing for supported commands |
 | `parseOnly` | boolean | `false` | Drop raw stdout if parsed |
 | `summary` | boolean | `false` | Return a concise summary when supported |
+| `successExitCode` | number or `null` | 0 | Exit code required for success |
+| `successFile` | string | -- | Optional file to validate after exit |
+| `successFilePattern` | string | -- | Regex that must match `successFile` |
 
-**Returns**: `ok`, `cmd`, `args`, `cwd`, `exitCode`, `timedOut`, `durationMs`, `stdout.raw`, `stdout.parsed`, optional `stdout.summary`, `stderr.raw`, optional `hint`
+**Returns**: `ok`, `cmd`, `args`, `cwd`, `exitCode`, `timedOut`, `durationMs`, `stdout.raw`, `stdout.parsed`, optional `stdout.summary`, `stderr.raw`, optional `checks`, optional `hint`
 
 ### `terminal_run_paged`
 
@@ -350,6 +353,17 @@ For Windows tools installed under `Program Files`, prefer this shape over `power
 
 ```
 terminal_run({ cmd: "C:\\Program Files\\Vendor\\Tool.exe", args: ["/flag:value", "/other"] })
+```
+
+For compilers that only report success in a log file:
+
+```
+terminal_run({
+  cmd: "C:\\Program Files\\Vendor\\Tool.exe",
+  args: ["/compile:script.mq5", "/log:build.log"],
+  successFile: "build.log",
+  successFilePattern: "0 error"
+})
 ```
 
 ### Page through large read-only output
