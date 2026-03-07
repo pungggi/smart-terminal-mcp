@@ -116,6 +116,43 @@ test('strips mixed control characters', () => {
   assert.equal(stripAnsi('a\x01b\x02c\x7Fd'), 'abcd');
 });
 
+// --- Erase-in-line (EL) handling ---
+
+test('\\r + erase-to-EOL clears trailing chars from previous write', () => {
+  // Common pattern: \r\x1b[K means "go to col 0, erase rest of line"
+  assert.equal(stripAnsi('Loading... 100%\r\x1b[KDone'), 'Done');
+});
+
+test('\\r + \\x1b[0K (explicit param) clears trailing chars', () => {
+  assert.equal(stripAnsi('Loading... 100%\r\x1b[0KDone'), 'Done');
+});
+
+test('\\x1b[2K erases entire line', () => {
+  assert.equal(stripAnsi('old content\x1b[2Knew'), 'new');
+});
+
+test('erase-to-EOL mid-line truncates at cursor position', () => {
+  // cursor is at position 3 after "foo", erase clears the rest
+  assert.equal(stripAnsi('foobar\rfoo\x1b[K'), 'foo');
+});
+
+test('progress bar with \\r + erase-to-EOL', () => {
+  const input = [
+    'Downloading 10%',
+    '\r\x1b[KDownloading 50%',
+    '\r\x1b[KDownloading 100%',
+    '\r\x1b[KDone!',
+  ].join('');
+  assert.equal(stripAnsi(input), 'Done!');
+});
+
+test('erase-to-EOL with ANSI colors', () => {
+  assert.equal(
+    stripAnsi('\x1b[32mlong output\x1b[0m\r\x1b[K\x1b[32mshort\x1b[0m'),
+    'short'
+  );
+});
+
 // --- Combined / integration tests ---
 
 test('ANSI codes + carriage return overwrite', () => {
