@@ -116,6 +116,9 @@ export async function runCommand({
 
         if (signal) result.signal = signal;
         if (maxOutputExceeded) result.maxOutputExceeded = true;
+        if (successExitCode === null && exitCode !== 0 && exitCode !== null) {
+          result.exitCodeIgnored = true;
+        }
         if (shouldIncludeSuccessChecks({ successExitCode, successFile })) {
           result.checks = checks.details;
         }
