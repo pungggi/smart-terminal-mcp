@@ -20,6 +20,14 @@ test('strips OSC sequences (e.g. title setting)', () => {
   assert.equal(stripAnsi('\x1b]0;My Title\x07content'), 'content');
 });
 
+test('strips C1 8-bit OSC sequences (0x9D ... 0x9C)', () => {
+  assert.equal(stripAnsi('\x9D0;My Title\x9Ccontent'), 'content');
+});
+
+test('strips OSC terminated by ST (ESC backslash)', () => {
+  assert.equal(stripAnsi('\x1b]0;My Title\x1b\\content'), 'content');
+});
+
 test('returns plain text unchanged', () => {
   assert.equal(stripAnsi('hello world'), 'hello world');
 });

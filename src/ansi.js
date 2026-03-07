@@ -7,8 +7,8 @@
 // - C1 control codes
 const ANSI_PATTERN = new RegExp(
   [
-    // OSC sequences: ESC ] ... (BEL | ST)  — must come first to match greedily
-    '\\u001B\\][^\\u0007\\u001B]*(?:\\u0007|\\u001B\\\\)',
+    // OSC sequences: ESC ] or C1 0x9D, terminated by BEL, ST (ESC \), or C1 ST (0x9C)
+    '(?:\\u001B\\]|\\u009D)[^\\u0007\\u001B\\u009C]*(?:\\u0007|\\u001B\\\\|\\u009C)',
     // CSI sequences and other structured escapes
     '[\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*|[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)',
     '(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]))',
