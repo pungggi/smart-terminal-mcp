@@ -229,6 +229,14 @@ function buildSpawnPlan({ cmd, args, cwd }) {
   }
 
   const resolvedCommand = resolveWindowsCommand(cmd, cwd);
+
+  // When the caller explicitly invokes cmd.exe with /c (e.g. for shell
+  // built-ins like `for /f`), join the trailing args into a single verbatim
+  // command string so cmd.exe interprets them correctly.
+  if (isExplicitCmdExeCall(resolvedCommand ?? cmd, args)) {
+    return buildCmdExePlan(args);
+  }
+
   if (!resolvedCommand || !isWindowsBatchCommand(resolvedCommand)) {
     return {
       command: resolvedCommand ?? cmd,
@@ -240,6 +248,37 @@ function buildSpawnPlan({ cmd, args, cwd }) {
   return {
     command: process.env.ComSpec || 'cmd.exe',
     args: ['/d', '/s', '/c', formatWindowsBatchCommand(resolvedCommand, args)],
+    windowsVerbatimArguments: true,
+  };
+}
+
+function isExplicitCmdExeCall(resolved, args) {
+  const comSpec = (process.env.ComSpec || 'cmd.exe').toLowerCase();
+  const name = resolved.toLowerCase();
+  if (name !== comSpec && name !== 'cmd' && name !== 'cmd.exe') return false;
+  return args.some((a) => a.toLowerCase() === '/c');
+}
+
+function buildCmdExePlan(args) {
+  const comSpec = process.env.ComSpec || 'cmd.exe';
+
+  // Collect any flags before /c (e.g. /d, /s) and the command body after /c.
+  const prefixFlags = [];
+  let commandBody = '';
+  let foundSlashC = false;
+  for (let i = 0; i < args.length; i++) {
+    if (!foundSlashC && args[i].toLowerCase() === '/c') {
+      foundSlashC = true;
+      // Everything after /c is the shell command – join into one string.
+      commandBody = args.slice(i + 1).join(' ');
+      break;
+    }
+    prefixFlags.push(args[i]);
+  }
+
+  return {
+    command: comSpec,
+    args: [...prefixFlags, '/s', '/c', `"${commandBody}"`],
     windowsVerbatimArguments: true,
   };
 }
