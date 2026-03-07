@@ -146,6 +146,13 @@ test('progress bar with \\r + erase-to-EOL', () => {
   assert.equal(stripAnsi(input), 'Done!');
 });
 
+test('standalone erase-to-EOL without \\r does not leak sentinel', () => {
+  // \x1b[K at end of line should truncate but not leave sentinel in output
+  assert.equal(stripAnsi('foobar\x1b[K'), 'foobar');
+  // \x1b[K mid-content: erase from cursor to end, then continue writing
+  assert.equal(stripAnsi('hello world\x1b[K done'), 'hello world done');
+});
+
 test('erase-to-EOL with ANSI colors', () => {
   assert.equal(
     stripAnsi('\x1b[32mlong output\x1b[0m\r\x1b[K\x1b[32mshort\x1b[0m'),

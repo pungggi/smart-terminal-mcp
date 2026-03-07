@@ -75,7 +75,7 @@ function collapseCarriageReturns(text) {
 
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].includes('\r')) continue;
+    if (!lines[i].includes('\r') && !lines[i].includes(ERASE_EOL)) continue;
     const segments = lines[i].split('\r');
     const chars = [];
     for (const segment of segments) {
