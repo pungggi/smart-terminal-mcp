@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { resolve as resolvePath } from 'node:path';
+import { platform } from 'node:os';
 import { PtySession } from './pty-session.js';
-import { detectShell } from './shell-detector.js';
+import { detectShell, isAvailable } from './shell-detector.js';
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_SESSIONS = 10;
@@ -41,7 +42,7 @@ export class SessionManager {
 
     const resolvedCwd = await resolveSessionCwd(cwd);
     const detected = detectShell();
-    const resolvedShell = shell || detected.shell;
+    const resolvedShell = shell ? resolveUserShell(shell) : detected.shell;
     const shellArgs = shell ? [] : detected.args;
 
     const id = randomUUID().slice(0, 8);
@@ -119,6 +120,32 @@ export class SessionManager {
       }
     }
   }
+}
+
+const WINDOWS_SHELL_EXTENSIONS = ['.exe', '.cmd', '.bat'];
+
+/**
+ * Validate and resolve a user-provided shell name.
+ * On Windows, tries appending common extensions if the bare name isn't found.
+ * @param {string} shell
+ * @returns {string} The resolved shell name
+ */
+function resolveUserShell(shell) {
+  if (isAvailable(shell)) return shell;
+
+  // On Windows, try appending .exe etc. so "pwsh" resolves to "pwsh.exe"
+  if (platform() === 'win32' && !shell.includes('.')) {
+    for (const ext of WINDOWS_SHELL_EXTENSIONS) {
+      const candidate = `${shell}${ext}`;
+      if (isAvailable(candidate)) return candidate;
+    }
+  }
+
+  const detected = detectShell();
+  throw new Error(
+    `Shell "${shell}" not found. The auto-detected shell is "${detected.shell}". ` +
+    'Omit the shell parameter to use auto-detection, or provide the full path to the shell executable.',
+  );
 }
 
 export async function resolveSessionCwd(cwd) {

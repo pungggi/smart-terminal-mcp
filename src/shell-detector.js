@@ -6,7 +6,7 @@ import { platform } from 'node:os';
  * @param {string} exe
  * @returns {boolean}
  */
-function isAvailable(exe) {
+export function isAvailable(exe) {
   try {
     const cmd = platform() === 'win32' ? 'where' : 'which';
     execFileSync(cmd, [exe], { stdio: 'ignore', timeout: 5000 });

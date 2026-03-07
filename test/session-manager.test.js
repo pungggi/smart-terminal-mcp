@@ -42,6 +42,31 @@ test('SessionManager.create rejects invalid cwd before creating a session', asyn
   }
 });
 
+test('SessionManager.create rejects unknown shell before creating a session', async () => {
+  let constructed = 0;
+  class FakeSession {
+    constructor() {
+      constructed++;
+    }
+  }
+
+  const manager = new SessionManager({ SessionClass: FakeSession });
+
+  try {
+    await assert.rejects(
+      () => manager.create({ shell: 'nonexistent-shell-abc123' }),
+      (error) => {
+        assert.match(error.message, /Shell "nonexistent-shell-abc123" not found/);
+        return true;
+      }
+    );
+    assert.equal(constructed, 0);
+    assert.equal(manager.list().length, 0);
+  } finally {
+    manager.destroyAll();
+  }
+});
+
 test('SessionManager.create rejects file cwd values', async () => {
   const tempDir = await mkdtemp(join(tmpdir(), 'smart-terminal-mcp-'));
   const filePath = join(tempDir, 'not-a-directory.txt');
