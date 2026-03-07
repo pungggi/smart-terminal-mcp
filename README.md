@@ -161,7 +161,7 @@ Execute a command with deterministic completion detection. Large outputs are tru
 
 ### `terminal_run`
 
-Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Output is capped by `maxOutputBytes` rather than head + tail truncation. Shell built-ins such as `dir` or `cd` are not supported. On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed.
+Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Output is capped by `maxOutputBytes` rather than head + tail truncation. Shell built-ins such as `dir` or `cd` are not supported. On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed. Prefer passing the target executable directly as `cmd` instead of wrapping it in `powershell -Command` or `cmd /c`, especially when Windows paths contain spaces.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -344,6 +344,12 @@ terminal_exec({ sessionId, command: "ls -la" })  -> { output: "...", exitCode: 0
 ```
 terminal_run({ cmd: "git", args: ["status", "--porcelain=v1", "--branch"] })
 -> { ok: true, stdout: { raw: "...", parsed: { branch: {...}, staged: [], modified: [], untracked: [] } } }
+```
+
+For Windows tools installed under `Program Files`, prefer this shape over `powershell -Command`:
+
+```
+terminal_run({ cmd: "C:\\Program Files\\Vendor\\Tool.exe", args: ["/flag:value", "/other"] })
 ```
 
 ### Page through large read-only output

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getStructuredParserHint, runCommand } from '../src/command-runner.js';
@@ -153,6 +153,33 @@ test('runCommand executes explicit .cmd files on Windows', async (t) => {
   try {
     const scriptPath = join(tempDir, 'args-wrapper.cmd');
     await writeFile(scriptPath, '@echo off\r\necho [%~1]\r\n');
+
+    const result = await runCommand({
+      cmd: scriptPath,
+      args: ['hello world'],
+      parse: false,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout.raw, /\[hello world\]/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('runCommand handles explicit command paths with spaces', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'smart terminal mcp-'));
+
+  try {
+    const isWindows = process.platform === 'win32';
+    const scriptPath = join(tempDir, isWindows ? 'space wrapper.cmd' : 'space-wrapper.sh');
+    const scriptBody = isWindows
+      ? '@echo off\r\necho [%~1]\r\n'
+      : '#!/bin/sh\necho "[$1]"\n';
+
+    await writeFile(scriptPath, scriptBody);
+    if (!isWindows) await chmod(scriptPath, 0o755);
 
     const result = await runCommand({
       cmd: scriptPath,

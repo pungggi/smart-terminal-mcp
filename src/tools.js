@@ -107,10 +107,10 @@ export function registerTools(server, manager) {
   // --- terminal_run ---
   server.tool(
     'terminal_run',
-    'Run a one-shot non-interactive command.',
+    'Run a binary directly; avoid shell quoting.',
     {
-      cmd: z.string().describe('Executable'),
-      args: z.array(z.string()).default([]).describe('Arguments'),
+      cmd: z.string().describe('Executable path or name'),
+      args: z.array(z.string()).default([]).describe('Args passed verbatim'),
       cwd: z.string().optional().describe('Working directory'),
       timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS).describe('Timeout in ms'),
       maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES).describe('Max output bytes'),
