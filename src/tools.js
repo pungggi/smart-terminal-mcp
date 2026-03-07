@@ -69,15 +69,27 @@ export function registerTools(server, manager) {
       env: z.record(z.string()).optional().describe('Environment variables'),
     },
     async ({ shell, cols, rows, cwd, name, env }) => {
-      const session = await manager.create({ shell, cols, rows, cwd, name, env });
-      const banner = await session.waitForBanner();
-      return jsonContent({
-        sessionId: session.id,
-        shell: session.shell,
-        shellType: session.shellType,
-        cwd: session.cwd,
-        banner: banner || '(no banner)',
-      });
+      let session;
+      try {
+        session = await manager.create({ shell, cols, rows, cwd, name, env });
+        const banner = await session.waitForBanner();
+        return jsonContent({
+          sessionId: session.id,
+          shell: session.shell,
+          shellType: session.shellType,
+          cwd: session.cwd,
+          banner: banner || '(no banner)',
+        });
+      } catch (err) {
+        if (session?.id && typeof manager.stop === 'function') {
+          try {
+            manager.stop(session.id);
+          } catch {
+            // Preserve the original startup failure.
+          }
+        }
+        throw err;
+      }
     }
   );
 

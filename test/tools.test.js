@@ -111,6 +111,66 @@ test('tool schemas keep agent-friendly default output sizes', () => {
   });
 });
 
+test('terminal_start returns compact session metadata', async () => {
+  const server = createFakeServer();
+  const createCalls = [];
+  const manager = {
+    create: async (opts) => {
+      createCalls.push(opts);
+      return {
+        id: 's1',
+        shell: 'pwsh.exe',
+        shellType: 'powershell',
+        cwd: 'C:/repo',
+        waitForBanner: async () => 'PowerShell 7',
+      };
+    },
+  };
+
+  registerTools(server, manager);
+
+  const result = await server.tools.get('terminal_start').handler({
+    cols: 140,
+    rows: 40,
+    cwd: 'C:/repo',
+    name: 'smc-verify',
+  });
+
+  assert.deepEqual(createCalls, [{ cols: 140, rows: 40, cwd: 'C:/repo', name: 'smc-verify', shell: undefined, env: undefined }]);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    sessionId: 's1',
+    shell: 'pwsh.exe',
+    shellType: 'powershell',
+    cwd: 'C:/repo',
+    banner: 'PowerShell 7',
+  });
+});
+
+test('terminal_start stops a created session when banner startup fails', async () => {
+  const server = createFakeServer();
+  const stopCalls = [];
+  const manager = {
+    create: async () => ({
+      id: 's1',
+      cwd: 'C:/repo',
+      waitForBanner: async () => {
+        throw new Error('banner failed');
+      },
+    }),
+    stop: (sessionId) => {
+      stopCalls.push(sessionId);
+    },
+  };
+
+  registerTools(server, manager);
+
+  await assert.rejects(
+    () => server.tools.get('terminal_start').handler({}),
+    /banner failed/
+  );
+  assert.deepEqual(stopCalls, ['s1']);
+});
+
 test('terminal_run forwards summary mode for concise output', async () => {
   const server = createFakeServer();
   const lookupCommand = process.platform === 'win32' ? 'where' : 'which';

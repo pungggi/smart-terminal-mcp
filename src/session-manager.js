@@ -1,15 +1,23 @@
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
+import { resolve as resolvePath } from 'node:path';
 import { PtySession } from './pty-session.js';
 import { detectShell } from './shell-detector.js';
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_SESSIONS = 10;
 const CLEANUP_INTERVAL_MS = 60 * 1000; // Check every minute
+const CWD_ERROR_MESSAGES = {
+  EACCES: 'Permission denied',
+  ENOENT: 'Path does not exist',
+  ENOTDIR: 'A component of the path is not a directory',
+};
 
 export class SessionManager {
-  constructor() {
+  constructor({ SessionClass = PtySession } = {}) {
     /** @type {Map<string, PtySession>} */
     this._sessions = new Map();
+    this._SessionClass = SessionClass;
     this._cleanupTimer = setInterval(() => this._cleanupExpired(), CLEANUP_INTERVAL_MS);
     // Don't keep process alive just for cleanup
     this._cleanupTimer.unref();
@@ -31,18 +39,19 @@ export class SessionManager {
       throw new Error(`Maximum ${MAX_SESSIONS} concurrent sessions reached. Stop an existing session first.`);
     }
 
+    const resolvedCwd = await resolveSessionCwd(cwd);
     const detected = detectShell();
     const resolvedShell = shell || detected.shell;
     const shellArgs = shell ? [] : detected.args;
 
     const id = randomUUID().slice(0, 8);
-    const session = new PtySession({
+    const session = new this._SessionClass({
       id,
       shell: resolvedShell,
       shellArgs,
       cols,
       rows,
-      cwd: cwd || process.cwd(),
+      cwd: resolvedCwd,
       name,
       env,
     });
@@ -110,6 +119,31 @@ export class SessionManager {
       }
     }
   }
+}
+
+export async function resolveSessionCwd(cwd) {
+  const resolvedCwd = resolvePath(cwd ?? process.cwd());
+
+  let stats;
+  try {
+    stats = await stat(resolvedCwd);
+  } catch (err) {
+    throw new Error(`Invalid cwd "${resolvedCwd}": ${formatCwdError(err)}`);
+  }
+
+  if (!stats.isDirectory()) {
+    throw new Error(`Invalid cwd "${resolvedCwd}": Path is not a directory.`);
+  }
+
+  return resolvedCwd;
+}
+
+function formatCwdError(err) {
+  const hint = CWD_ERROR_MESSAGES[err?.code];
+  if (hint) {
+    return `${hint} (${err.code})`;
+  }
+  return err?.message ?? String(err);
 }
 
 function log(msg) {
