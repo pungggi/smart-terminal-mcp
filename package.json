@@ -1,6 +1,6 @@
 {
   "name": "smart-terminal-mcp",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "description": "MCP PTY server providing AI agents with real interactive terminal access",
   "type": "module",
   "main": "src/index.js",
