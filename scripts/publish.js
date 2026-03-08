@@ -1,0 +1,269 @@
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { execSync, spawn } from 'child_process';
+import { join } from 'path';
+import { platform, homedir } from 'os';
+import { createInterface } from 'readline';
+
+const ROOT = process.cwd();
+
+// ── File Paths ──
+const packageJsonPath = join(ROOT, 'package.json');
+const packageLockPath = join(ROOT, 'package-lock.json');
+const serverJsonPath = join(ROOT, 'server.json');
+const smitheryJsonPath = join(ROOT, 'smithery.json');
+const serverCardPath = join(ROOT, 'server-card.json');
+const httpScanServerPath = join(ROOT, 'scripts', 'http-scan-server.js');
+
+// ── Helpers ──
+function runCommand(command, errorMessage, extraEnv = {}) {
+  try {
+    console.log(`\n> Running: ${command}`);
+    execSync(command, {
+      stdio: 'inherit',
+      env: { ...process.env, ...extraEnv },
+    });
+  } catch {
+    console.error(`\n❌ Error: ${errorMessage}`);
+    process.exit(1);
+  }
+}
+
+function getMcpPublisher() {
+  if (platform() === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
+    const winPath = join(localAppData, 'mcp-publisher', 'mcp-publisher.exe');
+    try {
+      execSync(`"${winPath}" --help`, { stdio: 'ignore' });
+      return `"${winPath}"`;
+    } catch {
+      return 'mcp-publisher';
+    }
+  }
+  return 'mcp-publisher';
+}
+
+function bumpVersion(version, type) {
+  const [major, minor, patch] = version.split('.').map(Number);
+  if (type === 'major') return `${major + 1}.0.0`;
+  if (type === 'minor') return `${major}.${minor + 1}.0`;
+  if (type === 'patch') return `${major}.${minor}.${patch + 1}`;
+  return type;
+}
+
+/**
+ * Introspect the MCP server via stdio to discover tools.
+ * Spawns the server, sends initialize + tools/list, captures the result.
+ */
+async function discoverTools() {
+  console.log('\n🔍 Discovering tools from MCP server...');
+  return new Promise((resolve, reject) => {
+    const child = spawn('node', ['src/index.js'], {
+      cwd: ROOT,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, SMITHERY_SCAN: '1' },
+    });
+
+    let buffer = '';
+    let tools = null;
+    let phase = 'init'; // init -> list -> done
+
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk.toString();
+      // JSON-RPC messages are separated by newlines; try to parse each one
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete last line
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (phase === 'init' && msg.result?.protocolVersion) {
+            // Initialize succeeded, send initialized notification + tools/list
+            phase = 'list';
+            child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+            child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
+          } else if (phase === 'list' && msg.result?.tools) {
+            tools = msg.result.tools;
+            phase = 'done';
+            child.kill();
+          }
+        } catch { /* not valid JSON yet */ }
+      }
+    });
+
+    child.on('close', () => {
+      if (tools) {
+        console.log(`   Found ${tools.length} tools.`);
+        resolve(tools);
+      } else {
+        reject(new Error('Failed to discover tools from MCP server.'));
+      }
+    });
+
+    // Send initialize request
+    const initMsg = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'publish-scanner', version: '1.0.0' },
+      },
+    });
+    child.stdin.write(initMsg + '\n');
+
+    // Timeout after 15s
+    setTimeout(() => {
+      child.kill();
+      reject(new Error('Timeout discovering tools.'));
+    }, 15_000);
+  });
+}
+
+/**
+ * Generate server-card.json and update http-scan-server.js with the latest tools.
+ */
+function updateServerCard(tools, version) {
+  const card = {
+    serverInfo: { name: 'smart-terminal-mcp', version },
+    tools: tools.map(t => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    })),
+    resources: [],
+    prompts: [],
+  };
+
+  // Write standalone server-card.json
+  writeFileSync(serverCardPath, JSON.stringify(card, null, 2) + '\n');
+  console.log(`   Written server-card.json (${tools.length} tools)`);
+
+  // Update http-scan-server.js to read from server-card.json instead of hardcoding
+  if (existsSync(httpScanServerPath)) {
+    const content = readFileSync(httpScanServerPath, 'utf8');
+    // Only rewrite if it still has hardcoded SERVER_CARD
+    if (content.includes('const SERVER_CARD = {')) {
+      const updated = content.replace(
+        /\/\/ Static server card.*?^const SERVER_CARD = \{.*?\};\s*/ms,
+        `// Server card is auto-generated by publish.js — do not edit manually\n` +
+        `const SERVER_CARD = JSON.parse(readFileSync(new URL('../server-card.json', import.meta.url), 'utf8'));\n`,
+      );
+      // Add readFileSync import if missing
+      const final = updated.includes("import { readFileSync }")
+        ? updated
+        : updated.replace(
+            "import http from 'node:http';",
+            "import http from 'node:http';\nimport { readFileSync } from 'node:fs';",
+          );
+      writeFileSync(httpScanServerPath, final);
+      console.log('   Updated http-scan-server.js to read from server-card.json');
+    }
+  }
+}
+
+/**
+ * Publish to Smithery by spinning up the HTTP scan server + cloudflare tunnel.
+ */
+async function publishToSmithery() {
+  console.log('\n💎 Phase 3: Publishing to Smithery.ai...');
+  console.log('   Starting HTTP scan server...');
+
+  const httpServer = spawn('node', ['scripts/http-scan-server.js'], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  // Wait for server to be ready
+  await new Promise((resolve) => {
+    httpServer.stdout.on('data', (d) => {
+      if (d.toString().includes('MCP HTTP scan server')) resolve();
+    });
+    setTimeout(resolve, 3000);
+  });
+
+  console.log('   Starting Cloudflare tunnel...');
+  const tunnel = spawn('npx', ['-y', 'cloudflared', 'tunnel', '--url', 'http://localhost:3456'], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: true,
+  });
+
+  // Extract tunnel URL from stderr (cloudflared logs to stderr)
+  const tunnelUrl = await new Promise((resolve, reject) => {
+    let output = '';
+    const onData = (d) => {
+      output += d.toString();
+      const match = output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+      if (match) resolve(match[0]);
+    };
+    tunnel.stderr.on('data', onData);
+    tunnel.stdout.on('data', onData);
+    setTimeout(() => reject(new Error('Tunnel URL not found within 30s')), 30_000);
+  });
+
+  console.log(`   Tunnel URL: ${tunnelUrl}`);
+  console.log('   Publishing to Smithery...');
+
+  try {
+    const apiKey = process.env.SMITHERY_API_KEY || '';
+    const envVars = apiKey ? { SMITHERY_API_KEY: apiKey } : {};
+    runCommand(
+      `npx smithery mcp publish "${tunnelUrl}/mcp" -n pungggi/smart-terminal`,
+      'Smithery.ai publishing failed.',
+      envVars,
+    );
+  } finally {
+    tunnel.kill();
+    httpServer.kill();
+    console.log('   Cleaned up HTTP server and tunnel.');
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  MAIN
+// ══════════════════════════════════════════════════════════
+const versionArg = process.argv[2] || 'patch';
+const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+const currentVersion = pkg.version;
+const nextVersion = bumpVersion(currentVersion, versionArg);
+
+console.log(`\n🚀 Starting publication of version ${nextVersion} (from ${currentVersion})`);
+
+// ── Step 1: Update manifests ──
+console.log('📝 Updating version in package.json, package-lock.json, server.json, smithery.json...');
+pkg.version = nextVersion;
+writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2) + '\n');
+
+try {
+  const pkgLock = JSON.parse(readFileSync(packageLockPath, 'utf8'));
+  pkgLock.version = nextVersion;
+  if (pkgLock.packages?.['']) pkgLock.packages[''].version = nextVersion;
+  writeFileSync(packageLockPath, JSON.stringify(pkgLock, null, 2) + '\n');
+} catch {}
+
+[serverJsonPath, smitheryJsonPath].forEach((path) => {
+  try {
+    const json = JSON.parse(readFileSync(path, 'utf8'));
+    json.version = nextVersion;
+    if (Array.isArray(json.packages)) json.packages.forEach((p) => (p.version = nextVersion));
+    writeFileSync(path, JSON.stringify(json, null, 2) + '\n');
+  } catch {}
+});
+
+// ── Step 2: Discover tools & generate server card ──
+const tools = await discoverTools();
+updateServerCard(tools, nextVersion);
+
+// ── Step 3: npm ──
+console.log('\n📦 Phase 1: Publishing to npm...');
+runCommand('npm publish --access public', 'npm publishing failed.');
+
+// ── Step 4: Official MCP Registry ──
+console.log('\n🌍 Phase 2: Publishing to Official MCP Registry...');
+runCommand(`${getMcpPublisher()} publish`, 'Official MCP Registry publishing failed.');
+
+// ── Step 5: Smithery.ai (HTTP server + tunnel + publish) ──
+await publishToSmithery();
+
+console.log(`\n✅ SUCCESSFULLY PUBLISHED version ${nextVersion} to all registries!`);

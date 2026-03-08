@@ -1,7 +1,12 @@
 {
   "name": "smart-terminal-mcp",
-  "version": "1.2.12",
+  "version": "1.2.27",
   "description": "MCP PTY server providing AI agents with real interactive terminal access",
+  "mcpName": "io.github.pungggi/smart-terminal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pungggi/smart-terminal-mcp.git"
+  },
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -10,7 +15,8 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test",
-    "stable": "npm dist-tag add smart-terminal-mcp@1.2.12 stable"
+    "stable": "npm dist-tag add smart-terminal-mcp@1.2.13 stable",
+    "release": "node scripts/publish.js"
   },
   "keywords": [
     "mcp",
@@ -24,5 +30,9 @@
     "@modelcontextprotocol/sdk": "^1.27.0",
     "node-pty": "^1.1.0",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@smithery/cli": "^4.6.0",
+    "esbuild": "^0.27.0"
   }
 }

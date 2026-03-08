@@ -1,8 +1,12 @@
 # smart-terminal-mcp
+[![Smithery](https://img.shields.io/badge/Smithery-smart--terminal-blue)](https://smithery.ai/server/pungggi/smart-terminal)
+[![Official Registry](https://img.shields.io/badge/MCP-Official--Registry-green)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.pungggi/smart-terminal)
 
 A PTY-based MCP server with strong Windows support, giving MCP-capable AI clients and their agents persistent, interactive shell access via pseudo-terminals ([node-pty](https://github.com/microsoft/node-pty)).
 
 Unlike simple `exec`-based approaches, this keeps PTY-backed shell sessions alive across steps, with bidirectional communication for interactive CLI tools, incremental reads, and session state that carries forward.
+
+See the [Changelog](file:///c:/Users/Alessandro/source/smart-terminal-mcp/CHANGELOG.md) for recent updates.
 
 ## Why use this instead of your AI client's built-in terminal?
 

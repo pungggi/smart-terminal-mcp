@@ -1,0 +1,705 @@
+{
+  "payload": {
+    "type": "hosted",
+    "stateful": false,
+    "hasAuthAdapter": false,
+    "serverCard": {
+      "serverInfo": {
+        "name": "smart-terminal-mcp",
+        "version": "1.2.27"
+      },
+      "tools": [
+        {
+          "name": "terminal_start",
+          "description": "Start a new interactive terminal session.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "shell": {
+                "type": "string",
+                "description": "Shell"
+              },
+              "cols": {
+                "type": "integer",
+                "minimum": 20,
+                "maximum": 500,
+                "default": 120,
+                "description": "Terminal width in columns"
+              },
+              "rows": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 200,
+                "default": 30,
+                "description": "Terminal height in rows"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory"
+              },
+              "name": {
+                "type": "string",
+                "description": "Session name"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables"
+              }
+            },
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_exec",
+          "description": "Execute a command in a terminal session and wait for it to finish.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "command": {
+                "type": "string",
+                "description": "Command to execute"
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000,
+                "default": 30000,
+                "description": "Timeout in ms"
+              },
+              "maxLines": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 10000,
+                "default": 200,
+                "description": "Max output lines"
+              }
+            },
+            "required": [
+              "sessionId",
+              "command"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_run",
+          "description": "Run a binary directly; avoid shell quoting.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string",
+                "description": "Executable path or name"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Args passed verbatim"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory"
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000,
+                "default": 30000,
+                "description": "Timeout in ms"
+              },
+              "maxOutputBytes": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 1048576,
+                "default": 102400,
+                "description": "Max output bytes"
+              },
+              "parse": {
+                "type": "boolean",
+                "default": true,
+                "description": "Parse structured output"
+              },
+              "parseOnly": {
+                "type": "boolean",
+                "default": false,
+                "description": "Drop raw when parsed"
+              },
+              "summary": {
+                "type": "boolean",
+                "default": false,
+                "description": "Return concise summary"
+              },
+              "successExitCode": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": 0,
+                "description": "Required exit code"
+              },
+              "successFile": {
+                "type": "string",
+                "description": "File checked for success"
+              },
+              "successFilePattern": {
+                "type": "string",
+                "description": "Regex for success file"
+              }
+            },
+            "required": [
+              "cmd"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_run_paged",
+          "description": "Run a read-only command and return one page of output.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string",
+                "description": "Executable"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Arguments"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory"
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000,
+                "default": 30000,
+                "description": "Timeout in ms"
+              },
+              "maxOutputBytes": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 1048576,
+                "default": 102400,
+                "description": "Max output bytes"
+              },
+              "page": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "Page number"
+              },
+              "pageSize": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "default": 100,
+                "description": "Page size"
+              },
+              "summary": {
+                "type": "boolean",
+                "default": false,
+                "description": "Return concise summary"
+              }
+            },
+            "required": [
+              "cmd"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_write",
+          "description": "Write raw data to a terminal session.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "data": {
+                "type": "string",
+                "description": "Data to write"
+              }
+            },
+            "required": [
+              "sessionId",
+              "data"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_read",
+          "description": "Read new output from a terminal session.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 500,
+                "maximum": 300000,
+                "default": 30000,
+                "description": "Hard timeout in ms"
+              },
+              "idleTimeout": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 10000,
+                "default": 500,
+                "description": "Idle timeout in ms"
+              },
+              "maxLines": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 10000,
+                "default": 200,
+                "description": "Max output lines"
+              }
+            },
+            "required": [
+              "sessionId"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_get_history",
+          "description": "Get past output from a terminal session.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "History offset"
+              },
+              "maxLines": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000,
+                "default": 200,
+                "description": "Max lines to return"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "lines",
+                  "text"
+                ],
+                "default": "lines",
+                "description": "History format"
+              }
+            },
+            "required": [
+              "sessionId"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_resize",
+          "description": "Resize terminal dimensions.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "cols": {
+                "type": "integer",
+                "minimum": 20,
+                "maximum": 500,
+                "description": "New width in columns"
+              },
+              "rows": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 200,
+                "description": "New height in rows"
+              }
+            },
+            "required": [
+              "sessionId",
+              "cols",
+              "rows"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_send_key",
+          "description": "Send a key to the terminal.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "key": {
+                "type": "string",
+                "description": "Key name"
+              }
+            },
+            "required": [
+              "sessionId",
+              "key"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_wait",
+          "description": "Wait for a pattern to appear in terminal output.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "pattern": {
+                "type": "string",
+                "description": "Pattern"
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000,
+                "default": 30000,
+                "description": "Timeout in ms"
+              },
+              "returnMode": {
+                "type": "string",
+                "enum": [
+                  "tail",
+                  "full",
+                  "match-only"
+                ],
+                "default": "tail",
+                "description": "Return mode"
+              },
+              "tailLines": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "default": 50,
+                "description": "Tail lines"
+              }
+            },
+            "required": [
+              "sessionId",
+              "pattern"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_retry",
+          "description": "Retry a command with backoff.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "command": {
+                "type": "string",
+                "description": "Command"
+              },
+              "maxRetries": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10,
+                "default": 3,
+                "description": "Retry count"
+              },
+              "backoff": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "exponential",
+                  "linear"
+                ],
+                "default": "exponential",
+                "description": "Backoff mode"
+              },
+              "delayMs": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 60000,
+                "default": 1000,
+                "description": "Delay in ms"
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000,
+                "default": 30000,
+                "description": "Timeout in ms"
+              },
+              "maxLines": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 10000,
+                "default": 200,
+                "description": "Max output lines"
+              },
+              "successExitCode": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": 0,
+                "description": "Success exit code"
+              },
+              "successPattern": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null,
+                "description": "Output regex"
+              }
+            },
+            "required": [
+              "sessionId",
+              "command"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_diff",
+          "description": "Run two commands and return a unified diff.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "commandA": {
+                "type": "string",
+                "description": "Baseline command"
+              },
+              "commandB": {
+                "type": "string",
+                "description": "Comparison command"
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000,
+                "default": 30000,
+                "description": "Timeout in ms"
+              },
+              "maxLines": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 10000,
+                "default": 200,
+                "description": "Max output lines"
+              },
+              "contextLines": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 20,
+                "default": 3,
+                "description": "Diff context lines"
+              }
+            },
+            "required": [
+              "sessionId",
+              "commandA",
+              "commandB"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_stop",
+          "description": "Stop and clean up a terminal session.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID to stop"
+              }
+            },
+            "required": [
+              "sessionId"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_list",
+          "description": "List active terminal sessions.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "verbose": {
+                "type": "boolean",
+                "default": true,
+                "description": "Include full metadata"
+              }
+            },
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        },
+        {
+          "name": "terminal_write_file",
+          "description": "Write content to a file.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "description": "Session ID"
+              },
+              "path": {
+                "type": "string",
+                "description": "File path"
+              },
+              "content": {
+                "type": "string",
+                "description": "File content"
+              },
+              "encoding": {
+                "type": "string",
+                "enum": [
+                  "utf-8",
+                  "ascii",
+                  "base64",
+                  "hex",
+                  "latin1"
+                ],
+                "default": "utf-8",
+                "description": "File encoding"
+              },
+              "append": {
+                "type": "boolean",
+                "default": false,
+                "description": "Append mode"
+              }
+            },
+            "required": [
+              "sessionId",
+              "path",
+              "content"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          }
+        }
+      ],
+      "resources": [],
+      "prompts": []
+    },
+    "source": {
+      "commit": "931c07ca54da52d79b1dbc5aadfe2f7271f63bd3",
+      "branch": "main"
+    }
+  },
+  "artifacts": {
+    "module": "module.js",
+    "sourcemap": "module.js.map"
+  }
+}

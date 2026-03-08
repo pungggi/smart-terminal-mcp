@@ -7,14 +7,24 @@ import { registerTools } from './tools.js';
 
 const log = (msg) => process.stderr.write(`[smart-terminal-mcp] ${msg}\n`);
 
-async function main() {
+export function createSandboxServer() {
   const server = new McpServer({
     name: 'smart-terminal-mcp',
-    version: '1.0.1',
+    version: '1.2.27',
   });
-
   const manager = new SessionManager();
+  registerTools(server, manager);
+  return server;
+}
 
+export default createSandboxServer;
+
+async function main() {
+  const manager = new SessionManager();
+  const server = new McpServer({
+    name: 'smart-terminal-mcp',
+    version: '1.2.27',
+  });
   registerTools(server, manager);
 
   // Graceful shutdown
@@ -34,7 +44,13 @@ async function main() {
   log('Server started on stdio transport');
 }
 
-main().catch((err) => {
-  process.stderr.write(`[smart-terminal-mcp] Fatal: ${err.message}\n${err.stack}\n`);
-  process.exit(1);
-});
+// Skip auto-start when imported by Smithery scanner or other bundlers
+const scriptPath = (process.argv[1] || '').replace(/\\/g, '/');
+const isScanning = scriptPath.includes('.smithery') || scriptPath.includes('/scan-');
+
+if (!isScanning) {
+  main().catch((err) => {
+    process.stderr.write(`[smart-terminal-mcp] Fatal: ${err.message}\n${err.stack}\n`);
+    process.exit(1);
+  });
+}

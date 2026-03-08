@@ -1,0 +1,21 @@
+{
+  "name": "pungggi/smart-terminal",
+  "description": "MCP PTY server providing AI agents with real interactive terminal access",
+  "version": "1.2.27",
+  "repository": "https://github.com/pungggi/smart-terminal-mcp",
+  "tags": [
+    "terminal",
+    "pty",
+    "interactive",
+    "mcp"
+  ],
+  "toolExamples": [
+    {
+      "name": "run_command",
+      "args": {
+        "command": "ls -la"
+      },
+      "description": "List all files in the current directory with details"
+    }
+  ]
+}

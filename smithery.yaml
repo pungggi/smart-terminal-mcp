@@ -1,0 +1,8 @@
+# smithery.yaml - operational blueprint for Smithery
+startCommand:
+  stdio:
+    command: node
+    args: ["src/index.js"]
+configSchema:
+  type: object
+  properties: {}
