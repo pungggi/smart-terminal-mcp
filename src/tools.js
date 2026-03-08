@@ -50,6 +50,12 @@ function assertPagedCommandIsReadOnly(cmd, args = []) {
   throw new Error('terminal_run_paged only supports read-only commands: git (branch, diff, log, ls-files, remote, rev-parse, status), tasklist, where, which.');
 }
 
+function assertReadTimeouts(timeout, idleTimeout) {
+  if (idleTimeout >= timeout) {
+    throw new Error('idleTimeout must be less than timeout.');
+  }
+}
+
 /**
  * Register all MCP tools on the server.
  * @param {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer} server
@@ -224,11 +230,12 @@ export function registerTools(server, manager) {
     'Read new output from a terminal session.',
     {
       sessionId: z.string().describe('Session ID'),
-      timeout: z.number().int().min(500).max(300000).default(30000).describe('Hard timeout in ms'),
-      idleTimeout: z.number().int().min(100).max(10000).default(500).describe('Idle timeout in ms'),
+      timeout: z.number().int().min(500).max(300000).default(30000).describe('Hard timeout ms; > idleTimeout'),
+      idleTimeout: z.number().int().min(100).max(10000).default(500).describe('Idle timeout ms; < timeout'),
       maxLines: z.number().int().min(10).max(10000).default(DEFAULT_READ_MAX_LINES).describe('Max output lines'),
     },
     async ({ sessionId, timeout, idleTimeout, maxLines }) => {
+      assertReadTimeouts(timeout, idleTimeout);
       const session = manager.get(sessionId);
       const result = await session.read({ timeout, idleTimeout, maxLines });
       return jsonContent(result);

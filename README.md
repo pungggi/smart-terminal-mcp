@@ -6,8 +6,7 @@ A PTY-based MCP server with strong Windows support, giving MCP-capable AI client
 
 Unlike simple `exec`-based approaches, this keeps PTY-backed shell sessions alive across steps, with bidirectional communication for interactive CLI tools, incremental reads, and session state that carries forward.
 
-See the [Changelog](file:///c:/Users/Alessandro/source/smart-terminal-mcp/CHANGELOG.md) for recent updates.
-
+See the [Changelog](CHANGELOG.md) for recent updates.
 ## Why use this instead of your AI client's built-in terminal?
 
 Install this if you want a more consistent terminal workflow across AI clients, instead of relying on whatever built-in terminal behavior a single client happens to provide.

@@ -217,6 +217,29 @@ test('terminal_run can re-evaluate success from a file pattern', async () => {
   }
 });
 
+test('terminal_read rejects idleTimeout values that are not less than timeout', async () => {
+  const server = createFakeServer();
+  let getCalls = 0;
+  const manager = {
+    get: () => {
+      getCalls++;
+      throw new Error('manager.get should not be called');
+    },
+  };
+
+  registerTools(server, manager);
+
+  await assert.rejects(
+    () => server.tools.get('terminal_read').handler({
+      sessionId: 's1',
+      timeout: 500,
+      idleTimeout: 500,
+    }),
+    /idleTimeout must be less than timeout\./
+  );
+  assert.equal(getCalls, 0);
+});
+
 test('terminal_run_paged can return summaries for read-only commands', async () => {
   const server = createFakeServer();
   const lookupCommand = process.platform === 'win32' ? 'where' : 'which';

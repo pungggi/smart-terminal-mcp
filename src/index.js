@@ -14,9 +14,8 @@ export function createSandboxServer() {
   });
   const manager = new SessionManager();
   registerTools(server, manager);
-  return server;
+  return { server, manager };
 }
-
 export default createSandboxServer;
 
 async function main() {
@@ -46,7 +45,7 @@ async function main() {
 
 // Skip auto-start when imported by Smithery scanner or other bundlers
 const scriptPath = (process.argv[1] || '').replace(/\\/g, '/');
-const isScanning = scriptPath.includes('.smithery') || scriptPath.includes('/scan-');
+const isScanning = Boolean(process.env.SMITHERY_SCAN) || scriptPath.includes('.smithery') || scriptPath.includes('/scan-');
 
 if (!isScanning) {
   main().catch((err) => {

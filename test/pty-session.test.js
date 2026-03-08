@@ -119,7 +119,7 @@ test('read returns unread buffered output once', async () => {
   const first = await session.read({ timeout: 50, idleTimeout: 10, maxLines: 50 });
   const second = await session.read({ timeout: 50, idleTimeout: 10, maxLines: 50 });
 
-  assert.equal(first.output, 'echo hi\r\nhi\r\nPS C:\\repo>');
+  assert.equal(first.output, 'echo hi\nhi\nPS C:\\repo>');
   assert.equal(first.timedOut, false);
   assert.equal(second.output, '');
 });

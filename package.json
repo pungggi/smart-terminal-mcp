@@ -15,7 +15,7 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test",
-    "stable": "npm dist-tag add smart-terminal-mcp@1.2.13 stable",
+    "stable": "npm dist-tag add smart-terminal-mcp@1.2.27 stable",
     "release": "node scripts/publish.js"
   },
   "keywords": [
@@ -32,6 +32,10 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@babel/generator": "^7.29.1",
+    "@babel/parser": "^7.29.0",
+    "@babel/traverse": "^7.29.0",
+    "@babel/types": "^7.29.0",
     "@smithery/cli": "^4.6.0",
     "esbuild": "^0.27.0"
   }
