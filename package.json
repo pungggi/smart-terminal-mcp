@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test",
-    "stable": "npm dist-tag add smart-terminal-mcp@1.2.9 stable"
+    "stable": "npm dist-tag add smart-terminal-mcp@1.2.12 stable"
   },
   "keywords": [
     "mcp",
