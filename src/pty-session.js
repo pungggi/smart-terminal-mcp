@@ -116,6 +116,8 @@ export class PtySession {
     this._readCursor = 0;
     /** @type {((data: string) => void)[]} */
     this._dataListeners = [];
+    /** @type {string | null} */
+    this._pendingMarker = null;
 
     const env = buildSessionEnv(customEnv);
 
@@ -131,6 +133,12 @@ export class PtySession {
     this.process.onData((data) => {
       this.lastActivity = Date.now();
       this._buffer += data;
+
+      if (this._pendingMarker && this._buffer.includes(this._pendingMarker)) {
+        this.busy = false;
+        this._pendingMarker = null;
+      }
+
       // Enforce buffer cap — keep tail
       if (this._buffer.length > MAX_BUFFER_BYTES) {
         const overflow = this._buffer.length - MAX_BUFFER_BYTES;
@@ -184,7 +192,7 @@ export class PtySession {
    */
   async exec({ command, timeout = 30000, maxLines = DEFAULT_EXEC_MAX_LINES, sendNotification, progressToken }) {
     if (this.busy) {
-      throw new Error(`Session ${this.id} is busy with another command. Wait or use terminal_write for interactive input.`);
+      throw new Error(`Session ${this.id} is busy with a background command. Wait for it to finish, or use terminal_read to check output, or terminal_send_key("ctrl+c") to abort it.`);
     }
     if (!this.alive) {
       throw new Error(`Session ${this.id} is no longer alive.`);
@@ -207,15 +215,24 @@ export class PtySession {
       const { output, exitCode, cwd } = this._parseOutput(raw, marker, cwdMarker, preMarker);
       if (cwd) this.cwd = cwd;
 
+      if (timedOut) {
+        this._pendingMarker = marker;
+      } else {
+        this.busy = false;
+        this._pendingMarker = null;
+      }
+
       return {
         output: this._truncateOutput(output, maxLines),
         exitCode,
         cwd: this.cwd,
         timedOut,
-        ...(timedOut && { hint: 'Command may be waiting for input. Use terminal_write to send input or terminal_send_key("ctrl+c") to abort.' }),
+        ...(timedOut && { hint: 'Command is still running in the background. Session remains busy. Use terminal_read to get new output, or terminal_send_key("ctrl+c") to abort.' }),
       };
-    } finally {
+    } catch (err) {
       this.busy = false;
+      this._pendingMarker = null;
+      throw err;
     }
   }
 
@@ -228,6 +245,10 @@ export class PtySession {
       throw new Error(`Session ${this.id} is no longer alive.`);
     }
     this.process.write(data);
+    if (data.includes('\x03') || data.includes('\x04') || data.includes('\x1A')) {
+      this.busy = false;
+      this._pendingMarker = null;
+    }
   }
 
   /**
