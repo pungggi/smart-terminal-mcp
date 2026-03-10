@@ -104,9 +104,10 @@ export function registerTools(server, manager) {
             // Preserve the original startup failure.
           }
         }
-        return errorContent(
-          `${err.message}\n\nHint: call terminal_start with NO shell parameter to auto-detect the best available shell.`,
-        );
+        const hint = shell
+          ? '\n\nHint: call terminal_start with NO shell parameter to auto-detect the best available shell.'
+          : '';
+        return errorContent(`${err.message}${hint}`);
       }
     }
   );
