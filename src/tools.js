@@ -38,6 +38,16 @@ function jsonContent(payload) {
   };
 }
 
+function errorContent(message) {
+  return {
+    isError: true,
+    content: [{
+      type: 'text',
+      text: message,
+    }],
+  };
+}
+
 function assertPagedCommandIsReadOnly(cmd, args = []) {
   const commandName = normalizeCommandName(cmd);
   if (READ_ONLY_PAGED_COMMANDS.has(commandName)) return;
@@ -65,9 +75,9 @@ export function registerTools(server, manager) {
   // --- terminal_start ---
   server.tool(
     'terminal_start',
-    'Start a new interactive terminal session.',
+    'Start a terminal session. Auto-detects shell if omitted.',
     {
-      shell: z.string().optional().describe('Shell'),
+      shell: z.string().optional().describe('Shell to use; omit to detect'),
       cols: z.number().int().min(20).max(500).default(120).describe('Terminal width in columns'),
       rows: z.number().int().min(5).max(200).default(30).describe('Terminal height in rows'),
       cwd: z.string().optional().describe('Working directory'),
@@ -94,7 +104,9 @@ export function registerTools(server, manager) {
             // Preserve the original startup failure.
           }
         }
-        throw err;
+        return errorContent(
+          `${err.message}\n\nHint: call terminal_start with NO shell parameter to auto-detect the best available shell.`,
+        );
       }
     }
   );

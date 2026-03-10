@@ -164,10 +164,10 @@ test('terminal_start stops a created session when banner startup fails', async (
 
   registerTools(server, manager);
 
-  await assert.rejects(
-    () => server.tools.get('terminal_start').handler({}),
-    /banner failed/
-  );
+  const result = await server.tools.get('terminal_start').handler({});
+  assert.ok(result.isError, 'expected isError to be true');
+  assert.match(result.content[0].text, /banner failed/);
+  assert.match(result.content[0].text, /call terminal_start with NO shell parameter/i);
   assert.deepEqual(stopCalls, ['s1']);
 });
 

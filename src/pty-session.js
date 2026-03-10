@@ -245,7 +245,7 @@ export class PtySession {
       throw new Error(`Session ${this.id} is no longer alive.`);
     }
     this.process.write(data);
-    if (data.includes('\x03') || data.includes('\x04') || data.includes('\x1A')) {
+    if (data.includes('\x03') || data.includes('\x04')) {
       this.busy = false;
       this._pendingMarker = null;
     }
