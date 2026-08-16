@@ -92,8 +92,9 @@ test('_parseOutput ignores echoed wrapper text and keeps real output', () => {
 
   const result = session._parseOutput(raw, marker, cwdMarker, preMarker);
 
+  // The prompt after the CWD marker is not part of the command output.
   assert.deepEqual(result, {
-    output: 'hi\nPS C:\\repo>',
+    output: 'hi',
     exitCode: 0,
     cwd: 'C:\\repo',
   });
@@ -351,7 +352,7 @@ test('kill is idempotent', () => {
 test('_waitForMarker returns reason marker on completion', async () => {
   const session = createSession();
   session.alive = true;
-  session._buffer = 'output__MCP_DONE_abc__';
+  session._buffer = 'some output\n__MCP_DONE_abc___0__\n';
   session._dataListeners = [];
 
   const resultPromise = session._waitForMarker('__MCP_DONE_abc__', 500);
@@ -359,6 +360,52 @@ test('_waitForMarker returns reason marker on completion', async () => {
 
   assert.equal(result.reason, 'marker');
   assert.ok(result.buffer.includes('__MCP_DONE_abc__'));
+});
+
+test('_waitForMarker ignores marker text embedded mid-line (echoed command)', async () => {
+  const session = createSession();
+  session.alive = true;
+  // Simulates the PTY echo of the wrapped command: the marker literal is
+  // present, but only as part of a longer line — it must NOT resolve.
+  session._buffer = 'PS> echo "__MCP_PRE_x__"; cmd; echo "__MCP_DONE_abc__$?"; echo "__MCP_CWD_$(pwd)__"';
+  session._dataListeners = [];
+
+  const result = await session._waitForMarker('__MCP_DONE_abc__', 30);
+  assert.equal(result.reason, 'timeout');
+});
+
+test('_waitForMarker resolves on marker line arriving after the echo', async () => {
+  const session = createSession();
+  session.alive = true;
+  session._buffer = '';
+  session._dataListeners = [];
+
+  const resultPromise = session._waitForMarker('__MCP_DONE_abc__', 2000);
+
+  // Echo first (marker mid-line), then the real standalone marker line.
+  // Real marker output is marker + '_' + exitCode + '__'.
+  const onData = session._dataListeners.at(-1);
+  const feed = (text) => {
+    session._buffer += text;
+    onData(text);
+  };
+  feed('echo "__MCP_DONE_abc_$?"\r\n');
+  feed('__MCP_DONE_abc___0__\r\n');
+
+  const result = await resultPromise;
+  assert.equal(result.reason, 'marker');
+});
+
+test('_scanForMarkerLine matches bare marker line without exit code', () => {
+  const session = createSession();
+  session._buffer = '__MCP_DONE_abc__\n';
+  assert.equal(session._scanForMarkerLine('__MCP_DONE_abc__'), true);
+});
+
+test('_scanForMarkerLine handles ANSI-wrapped marker lines', () => {
+  const session = createSession();
+  session._buffer = '\u001b[32m__MCP_DONE_abc___0__\u001b[0m\r';
+  assert.equal(session._scanForMarkerLine('__MCP_DONE_abc__'), true);
 });
 
 test('_waitForMarker returns reason timeout on hard timeout', async () => {

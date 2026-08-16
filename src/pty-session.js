@@ -120,6 +120,10 @@ export class PtySession {
     this._dataListeners = [];
     /** @type {string | null} */
     this._pendingMarker = null;
+    /** Char offset of already-scanned buffer content for marker detection. */
+    this._markerScanCursor = 0;
+    /** @type {{ marker: string, withExit: RegExp, plain: RegExp } | null} */
+    this._markerMatcherCache = null;
 
     const env = buildSessionEnv(customEnv);
 
@@ -137,7 +141,7 @@ export class PtySession {
       this._buffer += data;
       this._totalBytesEmitted += data.length;
 
-      if (this._pendingMarker && this._buffer.includes(this._pendingMarker)) {
+      if (this._pendingMarker && this._scanForMarkerLine(this._pendingMarker)) {
         this.busy = false;
         this._pendingMarker = null;
       }
@@ -147,6 +151,7 @@ export class PtySession {
         const overflow = this._buffer.length - MAX_BUFFER_BYTES;
         this._buffer = this._buffer.slice(-MAX_BUFFER_BYTES);
         this._readCursor = Math.max(0, this._readCursor - overflow);
+        this._markerScanCursor = Math.max(0, this._markerScanCursor - overflow);
       }
       // Append cleaned output to rolling history
       this._appendToHistory(data);
@@ -215,7 +220,7 @@ export class PtySession {
       this.process.write(wrappedCommand + '\r');
 
       const { buffer: raw, reason } = await this._waitForMarker(marker, timeout, quietExitMs, minOutputBytes, sendNotification, progressToken);
-      const markerFound = raw.includes(marker);
+      const markerFound = reason === 'marker';
       const timedOut = reason === 'timeout';
       const quietExited = reason === 'quiet';
 
@@ -687,6 +692,7 @@ export class PtySession {
   _resetBuffer() {
     this._buffer = '';
     this._readCursor = 0;
+    this._markerScanCursor = 0;
   }
 
   _consumeUnreadBuffer() {
@@ -694,6 +700,47 @@ export class PtySession {
     const unread = this._buffer.slice(start);
     this._readCursor = this._buffer.length;
     return unread;
+  }
+
+  /**
+   * Get (cached) line-anchored regexes for a completion marker.
+   *
+   * The real marker output is always a standalone line
+   * (`__MCP_DONE_<id>__<exit>__` or the bare marker). The echoed wrapped
+   * command only ever contains the marker mid-line, so full-line matching
+   * ignores the echo. (Substring matching resolved on the echo before the
+   * command even ran and produced empty output — see #echo-race.)
+   */
+  _getMarkerMatchers(marker) {
+    if (!this._markerMatcherCache || this._markerMatcherCache.marker !== marker) {
+      this._markerMatcherCache = {
+        marker,
+        withExit: new RegExp(`^${escapeRegExp(marker)}_(\\d*)__$`),
+        plain: new RegExp(`^${escapeRegExp(marker)}$`),
+      };
+    }
+    return this._markerMatcherCache;
+  }
+
+  /**
+   * Scan NEW buffer content (plus a small overlap) for a real marker line.
+   * Incremental: each call only inspects data appended since the last scan,
+   * so chatty commands stay cheap.
+   * @param {string} marker
+   * @returns {boolean} true when a standalone marker line is present
+   */
+  _scanForMarkerLine(marker) {
+    const overlap = marker.length + 24;
+    const start = Math.max(0, (this._markerScanCursor || 0) - overlap);
+    const region = start > 0 ? this._buffer.slice(start) : this._buffer;
+    this._markerScanCursor = this._buffer.length;
+
+    const { withExit, plain } = this._getMarkerMatchers(marker);
+    for (const line of stripAnsi(region).split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (withExit.test(trimmed) || plain.test(trimmed)) return true;
+    }
+    return false;
   }
 
   /**
@@ -735,7 +782,7 @@ export class PtySession {
       };
 
       const checkBuffer = () => {
-        if (this._buffer.includes(marker)) {
+        if (this._scanForMarkerLine(marker)) {
           cleanup();
           resolve({ buffer: this._buffer, reason: 'marker' });
         }
@@ -808,7 +855,8 @@ export class PtySession {
     const outputLines = [];
     let exitCode = null;
     let cwd = null;
-    const markerRegex = new RegExp(`^${escapeRegExp(marker)}_(\\d+)__$`);
+    // \d* — pwsh $LASTEXITCODE is empty for pure-cmdlet commands (e.g. echo)
+    const markerRegex = new RegExp(`^${escapeRegExp(marker)}_(\\d*)__$`);
     const plainMarkerRegex = new RegExp(`^${escapeRegExp(marker)}$`);
     const cwdRegex = new RegExp(`^${escapeRegExp(cwdMarker)}(.+)__$`);
 
@@ -829,7 +877,7 @@ export class PtySession {
       // Extract exit code from marker line
       const markerMatch = trimmedLine.match(markerRegex);
       if (markerMatch) {
-        exitCode = parseInt(markerMatch[1], 10);
+        exitCode = markerMatch[1] ? parseInt(markerMatch[1], 10) : null;
         continue;
       }
 
@@ -842,6 +890,9 @@ export class PtySession {
       const cwdMatch = trimmedLine.match(cwdRegex);
       if (cwdMatch) {
         cwd = cwdMatch[1].trim();
+        // The CWD marker is always the last line of the wrapped command;
+        // anything after it is the next interactive prompt — stop there.
+        break;
         continue;
       }
 

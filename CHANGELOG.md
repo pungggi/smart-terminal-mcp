@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.37] - unreleased
+
+### Fixed
+- **`terminal_exec` marker race on echoed commands**: the PTY echoes the wrapped command, which contains the completion marker literal mid-line. The old substring match (`buffer.includes(marker)`) could resolve on the echo before the command even ran, returning empty output with `exitCode: null`. Marker detection is now line-anchored (the real marker is always a standalone line) and scanned incrementally.
+- **pwsh exit codes for cmdlet-only commands**: `echo` (Write-Output) never sets `$LASTEXITCODE`, so the marker expanded with an empty exit code and never matched. The marker matcher and `_parseOutput` now accept empty exit codes (`\d*`); exit code is `null` for such commands, numeric for native executables.
+- **Prompt leak in `terminal_exec` output**: the interactive shell prompt printed after the CWD marker was captured as command output. Parsing now stops at the CWD marker (always the last wrapper line).
+
 ## [1.2.36] - 2026-04-30
 
 ### Added
