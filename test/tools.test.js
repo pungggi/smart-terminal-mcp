@@ -314,7 +314,7 @@ test('terminal_run ENOENT error hints at shell=true and terminal_start', async (
       args: [],
       parse: false,
     }),
-    /pass shell:true or start an interactive session with terminal_start/
+    /use shell:true\. Alternatively, start an interactive session with terminal_start/
   );
 });
 

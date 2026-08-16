@@ -294,7 +294,7 @@ test('runCommand adds a helpful ENOENT hint for PATH commands', async () => {
       cmd: '__smart_terminal_missing_command__',
       parse: false,
     }),
-    /pass shell:true or start an interactive session with terminal_start/
+    /use shell:true\. Alternatively, start an interactive session with terminal_start/
   );
 });
 
