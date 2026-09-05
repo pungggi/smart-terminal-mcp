@@ -1,0 +1,12 @@
+# npm tarball exclusions (takes over from .gitignore when present)
+# Mirrors .gitignore, plus folders that must not ship in the npm package.
+node_modules/
+.pi/
+.vscode/
+*.log
+.env
+.DS_Store
+.mcpregistry_*
+vscode-extension/
+.claude/
+COM1invalid*

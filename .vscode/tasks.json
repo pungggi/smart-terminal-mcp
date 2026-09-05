@@ -1,0 +1,188 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "npm: test",
+            "type": "npm",
+            "script": "test",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            }
+        },
+        {
+            "label": "npm: release (patch)",
+            "type": "npm",
+            "script": "release",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "npm: release (minor)",
+            "type": "shell",
+            "command": "npm run release -- minor",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "npm: release (major)",
+            "type": "shell",
+            "command": "npm run release -- major",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "npm: update stable dist-tag",
+            "type": "shell",
+            "command": "$v = node -p 'require(\"./package.json\").version'; npm dist-tag add \"smart-terminal-mcp@$v\" stable",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: Build VSIX",
+            "type": "shell",
+            "command": "npm run build",
+            "options": {
+                "cwd": "${workspaceFolder}/vscode-extension"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: VSCE Publish",
+            "type": "shell",
+            "command": "node scripts/publish.js vsce",
+            "options": {
+                "cwd": "${workspaceFolder}/vscode-extension"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: OVSX Publish",
+            "type": "shell",
+            "command": "node scripts/publish.js ovsx",
+            "options": {
+                "cwd": "${workspaceFolder}/vscode-extension"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: Publish to Marketplaces (Internal)",
+            "dependsOn": [
+                "Extension: OVSX Publish",
+                "Extension: VSCE Publish"
+            ],
+            "dependsOrder": "parallel",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: Publish to Marketplaces",
+            "dependsOn": [
+                "npm: update stable dist-tag",
+                "Extension: Publish to Marketplaces (Internal)"
+            ],
+            "dependsOrder": "sequence",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: VSCE Publish (Pre-Release)",
+            "type": "shell",
+            "command": "node scripts/publish.js vsce --pre-release",
+            "options": {
+                "cwd": "${workspaceFolder}/vscode-extension"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: OVSX Publish (Pre-Release)",
+            "type": "shell",
+            "command": "node scripts/publish.js ovsx --pre-release",
+            "options": {
+                "cwd": "${workspaceFolder}/vscode-extension"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: Publish to Marketplaces (Pre-Release)",
+            "dependsOn": [
+                "Extension: VSCE Publish (Pre-Release)",
+                "Extension: OVSX Publish (Pre-Release)"
+            ],
+            "dependsOrder": "parallel",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": false
+            },
+            "problemMatcher": []
+        }
+    ]
+}

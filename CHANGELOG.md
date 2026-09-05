@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.2.37] - unreleased
+## [1.2.39] - 2026-09-05
 
 ### Fixed
 - **`terminal_exec` marker race on echoed commands**: the PTY echoes the wrapped command, which contains the completion marker literal mid-line. The old substring match (`buffer.includes(marker)`) could resolve on the echo before the command even ran, returning empty output with `exitCode: null`. Marker detection is now line-anchored (the real marker is always a standalone line) and scanned incrementally.

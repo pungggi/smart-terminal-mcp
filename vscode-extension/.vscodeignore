@@ -1,0 +1,14 @@
+# Bundled extension: the server lives in dist/server.mjs; node_modules
+# ships only the trimmed node-pty (native runtime dependency).
+.vscode/**
+node_modules/**
+!node_modules/node-pty/**
+node_modules/**/*.pdb
+scripts/**
+smoke-test-request.json
+dist/**/*.map
+node_modules/**/*.pdb
+**/.DS_Store
+**/*.vsix
+**/*.log
+.gitignore

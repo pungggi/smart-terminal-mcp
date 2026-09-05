@@ -1,0 +1,76 @@
+{
+    "name": "smart-terminal-mcp",
+    "displayName": "Smart Terminal MCP",
+    "description": "PTY-based MCP server giving VS Code agent mode real interactive terminal sessions: persistent shells, incremental reads, retries, diffs.",
+    "version": "1.2.39",
+    "publisher": "ngsoftware",
+    "license": "MIT",
+    "icon": "icon.png",
+    "galleryBanner": {
+        "color": "#181a1f",
+        "theme": "dark"
+    },
+    "engines": {
+        "vscode": "^1.103.0"
+    },
+    "categories": [
+        "AI",
+        "Chat",
+        "Other"
+    ],
+    "keywords": [
+        "mcp",
+        "terminal",
+        "pty",
+        "ai",
+        "copilot",
+        "agent mode"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/pungggi/smart-terminal-mcp.git"
+    },
+    "bugs": {
+        "url": "https://github.com/pungggi/smart-terminal-mcp/issues"
+    },
+    "homepage": "https://github.com/pungggi/smart-terminal-mcp#readme",
+    "type": "commonjs",
+    "main": "./extension.js",
+    "private": true,
+    "activationEvents": [],
+    "extensionKind": [
+        "ui"
+    ],
+    "contributes": {
+        "mcpServerDefinitionProviders": [
+            {
+                "id": "smart-terminal.mcpServer",
+                "label": "Smart Terminal"
+            }
+        ],
+        "configuration": {
+            "title": "Smart Terminal MCP",
+            "properties": {
+                "smartTerminalMcp.disabledTools": {
+                    "type": "string",
+                    "default": "terminal_run_paged,terminal_retry,terminal_diff,terminal_resize,terminal_send_key,terminal_get_history,terminal_write_file,terminal_watch",
+                    "markdownDescription": "Comma-separated list of tools to hide behind the `terminal_extra` meta-tool (reduces tool-definition token overhead). Set to an empty string to register all 15 tools with full schemas. Mirrors the `SMART_TERMINAL_DISABLED_TOOLS` env var of the server."
+                }
+            }
+        }
+    },
+    "dependencies": {
+        "node-pty": "^1.1.0"
+    },
+    "devDependencies": {
+        "esbuild": "^0.28.0",
+        "smart-terminal-mcp": "1.2.39"
+    },
+    "scripts": {
+        "vscode:prepublish": "node scripts/prepublish.js",
+        "build": "npm run vscode:prepublish && vsce package && node scripts/afterpublish.js",
+        "publish": "node scripts/publish.js vsce",
+        "publish:ovsx": "node scripts/publish.js ovsx",
+        "publish:prerelease": "node scripts/publish.js vsce --pre-release"
+    }
+}
