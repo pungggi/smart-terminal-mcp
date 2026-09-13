@@ -1,0 +1,41 @@
+version: 2
+
+updates:
+  # npm dependencies (both package.json ranges and lockfile pins).
+  # Security updates (CVE fixes) are handled automatically by GitHub once
+  # Dependabot alerts + automated security fixes are enabled on the repo —
+  # those PRs are generated out-of-band from this schedule.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Rome
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Dockerfile base image (node:20-slim)
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+
+  # GitHub Actions workflow versions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies

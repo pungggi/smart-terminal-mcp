@@ -1,0 +1,72 @@
+name: Security scan
+
+# Proactive dependency scanning: runs weekly and on demand. Findings do not
+# block PRs (unreachable transitive CVEs would create noise); they open (or
+# append to) a tracking issue labeled `security-scan` so nothing is lost.
+# Fast-fix PRs for reachable issues come from Dependabot security updates.
+
+on:
+  schedule:
+    - cron: "37 6 * * 1" # Mondays ~07:37 CET
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scan:
+    name: npm audit + OSV-Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: npm audit (HIGH and above)
+        id: audit
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      - name: OSV-Scanner (lockfile)
+        id: osv
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@v2.5.1
+        with:
+          scan-args: |-
+            ./
+
+      - name: Track findings in an issue
+        if: ${{ always() && (steps.audit.outcome == 'failure' || steps.osv.outcome == 'failure') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT: ${{ steps.audit.outcome }}
+          OSV: ${{ steps.osv.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create security-scan --color d73a4a \
+            --description "Automated dependency/vulnerability scan findings" 2>/dev/null || true
+          open=$(gh issue list --label security-scan --state open --json number --jq '.[0].number // empty')
+          body="Weekly security scan found actionable findings.
+
+          - npm audit (HIGH+): \`${AUDIT}\`
+          - OSV-Scanner: \`${OSV}\`
+
+          Full output: ${RUN_URL}
+
+          Triage per SECURITY.md SLAs. _Automated by the Security scan workflow._"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
+          else
+            gh issue create --label security-scan \
+              --title "Security scan findings" --body "$body"
+          fi
+
+      - name: Mark the run as failed when findings exist
+        if: ${{ steps.audit.outcome == 'failure' || steps.osv.outcome == 'failure' }}
+        run: |
+          echo "::error title=Security findings::npm audit or OSV-Scanner reported findings — see the security-scan issue for triage"
+          exit 1
