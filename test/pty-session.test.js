@@ -26,9 +26,18 @@ test('buildSessionEnv applies anti-blocking environment defaults', () => {
 });
 
 test('buildSessionEnv skips noninteractive override on Windows', () => {
-  const env = buildSessionEnv({}, 'win32');
-
-  assert.equal(env.DEBIAN_FRONTEND, undefined);
+  // Scrub any DEBIAN_FRONTEND inherited from the host (GitHub runners
+  // export DEBIAN_FRONTEND=noninteractive) so this asserts what the
+  // function ADDS, not what the environment already contained.
+  const hadKey = 'DEBIAN_FRONTEND' in process.env;
+  const prev = process.env.DEBIAN_FRONTEND;
+  delete process.env.DEBIAN_FRONTEND;
+  try {
+    const env = buildSessionEnv({}, 'win32');
+    assert.equal(env.DEBIAN_FRONTEND, undefined);
+  } finally {
+    if (hadKey) process.env.DEBIAN_FRONTEND = prev;
+  }
 });
 
 test('PowerShell wrapper uses safe marker interpolation', () => {

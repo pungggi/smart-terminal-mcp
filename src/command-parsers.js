@@ -1,7 +1,9 @@
 import { basename } from 'node:path';
 
 export function normalizeCommandName(cmd) {
-  const name = basename(cmd || '').toLowerCase();
+  // Normalize Windows separators first: node:path basename() is POSIX on
+  // non-Windows hosts and would not split 'C:\\...\\where.exe'.
+  const name = basename(String(cmd || '').replace(/\\/g, '/')).toLowerCase();
   return name.endsWith('.exe') ? name.slice(0, -4) : name;
 }
 

@@ -186,7 +186,7 @@ test('realistic npm-style progress bar', () => {
   assert.equal(stripAnsi(input), '⸩ ██████████████████ 10/10');
 });
 
-test('marker parsing compatibility — markers survive \\r processing', () => {
+test('marker parsing compatibility - markers survive \\r processing', () => {
   const marker = '__MCP_DONE_abc123__';
   const preMarker = '__MCP_PRE_def456__';
   const input = `${preMarker}\r\ncommand output\r\n${marker}_0__\r\n`;

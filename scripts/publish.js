@@ -304,7 +304,10 @@ function restoreFileSnapshot(filePath, snapshot) {
 }
 
 export function revertVersionChanges(fileSnapshots) {
-  console.log('\n↩️ Reverting local publish changes...');
+  // NOTE: keep this message ASCII-only — it can be printed while running
+  // under `node --test` (revertVersionChanges is unit-tested), and stray
+  // non-ASCII lines corrupt the TAP stream on Node 18's runner lexer.
+  console.log('\nReverting local publish changes...');
 
   for (const [filePath, snapshot] of fileSnapshots.entries()) {
     try {
