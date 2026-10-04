@@ -354,7 +354,7 @@ export class PtySession {
         const idx = this._dataListeners.indexOf(onData);
         if (idx !== -1) this._dataListeners.splice(idx, 1);
         resolve({
-          output: this._formatWaitOutput(returnMode, () => scanner.text(), tailTracker),
+          output: this._formatWaitOutput(returnMode, () => scanner.text(), tailTracker, scanner.evictedChars > 0),
           matched,
           timedOut: !matched,
         });
@@ -931,10 +931,14 @@ export class PtySession {
    * @param {'tail'|'full'|'match-only'} returnMode
    * @param {() => string} getFullText - Lazy: only evaluated for 'full'
    * @param {{ lines: string[], partial: string }} tailTracker
+   * @param {boolean} [truncated]
    */
-  _formatWaitOutput(returnMode, getFullText, tailTracker) {
+  _formatWaitOutput(returnMode, getFullText, tailTracker, truncated = false) {
     if (returnMode === 'match-only') return '';
-    if (returnMode === 'full') return getFullText().trim();
+    if (returnMode === 'full') {
+      const text = getFullText().trim();
+      return truncated ? `... [output truncated due to buffer limits] ...\n${text}` : text;
+    }
     return this._tailTrackerToOutput(tailTracker);
   }
 

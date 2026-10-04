@@ -215,6 +215,7 @@ export class BackgroundJobManager {
     this._shell = null;
     /** @type {Map<string, BackgroundJob>} */
     this._jobs = new Map();
+    this._pendingStarts = 0;
   }
 
   /**
@@ -227,33 +228,38 @@ export class BackgroundJobManager {
       throw new Error('command must be a non-empty string.');
     }
     this._ensureCapacity();
-
-    const resolvedCwd = await this._resolveCwd(cwd);
-    const { shell, args: baseArgs } = this._getShell();
-    const { args, windowsVerbatimArguments } = buildShellInvocation(shell, baseArgs, command);
-    const id = this._generateId();
-    const { logPath, logStream } = this._openLog(id);
-
-    const child = this._spawn(shell, args, {
-      cwd: resolvedCwd,
-      env: buildSessionEnv(env),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      windowsVerbatimArguments,
-      // Unix: own process group so stop() can signal the whole tree.
-      detached: process.platform !== 'win32',
-    });
+    this._pendingStarts++;
 
     try {
-      await once(child, 'spawn');
-    } catch (err) {
-      logStream?.end();
-      throw new Error(`Failed to start background job: ${err.message}`);
-    }
+      const resolvedCwd = await this._resolveCwd(cwd);
+      const { shell, args: baseArgs } = this._getShell();
+      const { args, windowsVerbatimArguments } = buildShellInvocation(shell, baseArgs, command);
+      const id = this._generateId();
+      const { logPath, logStream } = this._openLog(id);
 
-    const job = new BackgroundJob({ id, command, cwd: resolvedCwd, logPath, child, logStream });
-    this._jobs.set(id, job);
-    return job;
+      const child = this._spawn(shell, args, {
+        cwd: resolvedCwd,
+        env: buildSessionEnv(env),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        windowsVerbatimArguments,
+        // Unix: own process group so stop() can signal the whole tree.
+        detached: process.platform !== 'win32',
+      });
+
+      try {
+        await once(child, 'spawn');
+      } catch (err) {
+        logStream?.end();
+        throw new Error(`Failed to start background job: ${err.message}`);
+      }
+
+      const job = new BackgroundJob({ id, command, cwd: resolvedCwd, logPath, child, logStream });
+      this._jobs.set(id, job);
+      return job;
+    } finally {
+      this._pendingStarts--;
+    }
   }
 
   /**
@@ -280,7 +286,7 @@ export class BackgroundJobManager {
    */
   stop(id) {
     const job = this.get(id);
-    this._terminate(job);
+    this._terminate(job, true);
     return job.getInfo();
   }
 
@@ -291,24 +297,26 @@ export class BackgroundJobManager {
   /** Kill every running job (graceful shutdown). Synchronous. */
   stopAll() {
     for (const job of this._jobs.values()) {
-      this._terminate(job);
+      this._terminate(job, false);
     }
   }
 
-  _terminate(job) {
+  _terminate(job, throwOnError = false) {
     if (!job.alive || !job.pid) return;
     const result = this._killTree(job.pid);
     if (!result.ok) {
-      log(`Background job ${job.id}: ${result.reason}`);
+      const msg = `Failed to stop background job ${job.id}: ${result.reason}`;
+      log(msg);
+      if (throwOnError) throw new Error(msg);
     }
   }
 
   /** Evict the oldest finished job when full; refuse if all are running. */
   _ensureCapacity() {
-    if (this._jobs.size < this._maxJobs) return;
+    if ((this._jobs.size + this._pendingStarts) < this._maxJobs) return;
     const oldestFinished = [...this._jobs.values()].find((job) => !job.alive);
     if (!oldestFinished) {
-      throw new Error(`Maximum ${this._maxJobs} background jobs running. Stop one with terminal_job first.`);
+      throw new Error(`Maximum ${this._maxJobs} background jobs running or starting. Stop one with terminal_job first.`);
     }
     this._jobs.delete(oldestFinished.id);
   }

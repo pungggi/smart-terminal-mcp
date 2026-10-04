@@ -35,6 +35,7 @@ export function createIncrementalMatcher(regex, {
   let raw = '';
   let scannedUpTo = 0;
   let hasScanned = false;
+  let evictedChars = 0;
 
   return {
     /** @param {string} chunk */
@@ -42,11 +43,19 @@ export function createIncrementalMatcher(regex, {
       if (!chunk) return;
       raw += chunk;
       if (raw.length > maxRetainedChars) {
-        const overflow = raw.length - maxRetainedChars;
+        let overflow = raw.length - maxRetainedChars;
+        // Evict at a newline boundary if possible to preserve line anchors
+        const nl = raw.indexOf('\n', overflow - 1);
+        if (nl !== -1) {
+          overflow = nl + 1;
+        }
+        evictedChars += overflow;
         raw = raw.slice(overflow);
         scannedUpTo = Math.max(0, scannedUpTo - overflow);
       }
     },
+
+    get evictedChars() { return evictedChars; },
 
     /** Number of raw chars appended since the last scan. */
     get pendingChars() {
@@ -58,7 +67,18 @@ export function createIncrementalMatcher(regex, {
       // Nothing new: the previous window already failed to match.
       if (hasScanned && scannedUpTo === raw.length) return false;
       hasScanned = true;
-      const start = Math.max(0, scannedUpTo - overlapChars);
+      let start = Math.max(0, scannedUpTo - overlapChars);
+      
+      if (start > 0) {
+        // Backtrack to the beginning of the line to ensure multiline anchors (^/$)
+        // don't incorrectly match the middle of a cut line.
+        // Bound the backtrack to avoid O(N^2) scans on massively long single lines.
+        const prevNewline = raw.lastIndexOf('\n', start - 1);
+        if (prevNewline !== -1 && (start - prevNewline) <= overlapChars) {
+          start = prevNewline + 1;
+        }
+      }
+      
       scannedUpTo = raw.length;
       return regex.test(stripAnsi(raw.slice(start)));
     },
@@ -122,5 +142,6 @@ export function createThrottledMatcher(regex, {
     /** Cancel any scheduled scan. */
     dispose: clearTimer,
     text: () => matcher.text(),
+    get evictedChars() { return matcher.evictedChars; },
   };
 }
