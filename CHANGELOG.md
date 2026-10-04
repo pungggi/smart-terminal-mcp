@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Background Jobs Tool**: Added `terminal_run_background` and `terminal_job` MCP tools for managing long-running detached processes (like `npm run dev`) natively via `child_process.spawn`. This frees up PTY session slots and avoids locking the session "busy", allowing agents to start servers and continue other work in parallel. Background output is routed to in-memory buffers and rotating disk logs.
+
+### Fixed
+- **Windows Zombie Processes**: Implemented cross-platform process tree killing (`taskkill /T /F` on Windows) for PTY sessions. This ensures that web servers and scripts launched inside a PowerShell PTY do not become permanently orphaned zombies (which block ports) when the session is closed.
+- **Regex CPU Thrashing**: Replaced O(n²) string building and full-buffer regex matching in `waitForPattern` with an O(n) chunked stream incremental matcher. This prevents Node.js event loop blocks and CPU thrashing when processing massive output streams. Added support for evaluating multi-line `^`/`$` anchor semantics per-chunk.
+
 ## [1.2.39] - 2026-09-05
 
 ### Fixed
