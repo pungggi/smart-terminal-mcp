@@ -6,7 +6,10 @@ import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, runCommand } from './comm
 import { normalizeCommandName, summarizeCommandOutput } from './command-parsers.js';
 import { DEFAULT_PAGE_SIZE, paginateOutput } from './pager.js';
 import { DEFAULT_EXEC_MAX_LINES, DEFAULT_HISTORY_FORMAT, DEFAULT_HISTORY_LIMIT, DEFAULT_READ_MAX_LINES } from './pty-session.js';
+import { DEFAULT_JOB_READ_MAX_LINES } from './background-jobs.js';
 import { execAndDiff, execWithRetry } from './smart-tools.js';
+
+const DEFAULT_JOB_TAIL_LINES = 50;
 
 const FS_ERROR_MESSAGES = {
   EACCES: 'Permission denied',
@@ -380,6 +383,54 @@ export function registerTools(server, manager) {
     }
   );
 
+  // --- terminal_run_background ---
+  tool(
+    'terminal_run_background',
+    'Start a long-running command as a tracked background job.',
+    {
+      command: z.string(),
+      cwd: z.string().optional(),
+      env: z.record(z.string()).optional(),
+      waitFor: z.string().optional().describe('Regex to wait for'),
+      timeout: z.number().int().min(1000).max(600000).default(30000)
+        .describe('waitFor timeout ms'),
+      maxLines: z.number().int().min(1).max(10000).default(DEFAULT_JOB_TAIL_LINES),
+    },
+    async ({ command, cwd, env, waitFor, timeout, maxLines }) => {
+      // Compile first so an invalid pattern fails before anything is spawned.
+      const waitRegex = waitFor ? manager.jobs.compileWaitPattern(waitFor) : null;
+      const job = await manager.jobs.start({ command, cwd, env });
+      const waitResult = waitRegex ? await job.waitFor(waitRegex, timeout) : undefined;
+      const { output, position } = job.read({ maxLines });
+      return jsonContent({
+        ...job.getInfo(),
+        ...(waitResult && { waitResult }),
+        output,
+        position,
+      });
+    }
+  );
+
+  // --- terminal_job ---
+  tool(
+    'terminal_job',
+    'Read output from, or stop, a background job.',
+    {
+      jobId: z.string(),
+      action: z.enum(['output', 'stop']).default('output'),
+      since: z.number().int().min(0).optional()
+        .describe('Read after char position'),
+      maxLines: z.number().int().min(1).max(10000).default(DEFAULT_JOB_READ_MAX_LINES),
+    },
+    async ({ jobId, action, since, maxLines }) => {
+      if (action === 'stop') {
+        return jsonContent({ success: true, job: manager.jobs.stop(jobId) });
+      }
+      const job = manager.jobs.get(jobId);
+      return jsonContent({ jobId, ...job.read({ since, maxLines }) });
+    }
+  );
+
   // --- terminal_retry ---
   tool(
     'terminal_retry',
@@ -481,13 +532,14 @@ export function registerTools(server, manager) {
   // --- terminal_list ---
   tool(
     'terminal_list',
-    'List active terminal sessions.',
+    'List active terminal sessions and background jobs.',
     {
       verbose: z.boolean().default(true),
     },
     async ({ verbose = true }) => {
       const sessions = manager.list({ verbose });
-      return jsonContent({ sessions, count: sessions.length });
+      const jobs = manager.jobs?.list() ?? [];
+      return jsonContent({ sessions, count: sessions.length, ...(jobs.length > 0 && { jobs }) });
     }
   );
 
