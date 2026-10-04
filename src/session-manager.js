@@ -1,6 +1,8 @@
 import { stat } from 'node:fs/promises';
 import { resolve as resolvePath } from 'node:path';
 import { platform } from 'node:os';
+import { BackgroundJobManager } from './background-jobs.js';
+import { log } from './logger.js';
 import { PtySession } from './pty-session.js';
 import { detectShell, isAvailable } from './shell-detector.js';
 import { generateSessionId } from './session-id.js';
@@ -15,10 +17,17 @@ const CWD_ERROR_MESSAGES = {
 };
 
 export class SessionManager {
-  constructor({ SessionClass = PtySession } = {}) {
+  /**
+   * @param {object} [opts]
+   * @param {typeof PtySession} [opts.SessionClass]
+   * @param {BackgroundJobManager} [opts.jobs]
+   */
+  constructor({ SessionClass = PtySession, jobs } = {}) {
     /** @type {Map<string, PtySession>} */
     this._sessions = new Map();
     this._SessionClass = SessionClass;
+    /** Background jobs run outside PTY sessions (no busy lock). */
+    this.jobs = jobs ?? new BackgroundJobManager({ resolveCwd: resolveSessionCwd });
     this._cleanupTimer = setInterval(() => this._cleanupExpired(), CLEANUP_INTERVAL_MS);
     // Don't keep process alive just for cleanup
     this._cleanupTimer.unref();
@@ -97,13 +106,14 @@ export class SessionManager {
   }
 
   /**
-   * Kill all sessions (for graceful shutdown).
+   * Kill all sessions and background jobs (for graceful shutdown).
    */
   destroyAll() {
     for (const session of this._sessions.values()) {
       session.kill();
     }
     this._sessions.clear();
+    this.jobs.stopAll();
     clearInterval(this._cleanupTimer);
   }
 
@@ -171,8 +181,4 @@ function formatCwdError(err) {
     return `${hint} (${err.code})`;
   }
   return err?.message ?? String(err);
-}
-
-function log(msg) {
-  process.stderr.write(`[smart-terminal-mcp] ${msg}\n`);
 }

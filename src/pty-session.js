@@ -2,6 +2,9 @@ import * as pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
 import { platform } from 'node:os';
 import { stripAnsi } from './ansi.js';
+import { createThrottledMatcher } from './incremental-matcher.js';
+import { log } from './logger.js';
+import { killProcessTree } from './process-tree.js';
 import { compileUserRegex } from './regex-utils.js';
 import { getShellType } from './shell-detector.js';
 
@@ -15,6 +18,9 @@ export const DEFAULT_HISTORY_LIMIT = 200;
 export const DEFAULT_HISTORY_FORMAT = 'lines';
 const DEFAULT_WAIT_RETURN_MODE = 'tail';
 const DEFAULT_WAIT_TAIL_LINES = 50;
+/** Wait patterns are scanned in windows, so `^`/`$` use per-line semantics. */
+export const WAIT_PATTERN_FLAGS = 'm';
+const PROGRESS_INTERVAL_MS = 1000;
 
 export function buildSessionEnv(customEnv = {}, platformName = platform()) {
   const env = {
@@ -202,7 +208,7 @@ export class PtySession {
    */
   async exec({ command, timeout = 30000, maxLines = DEFAULT_EXEC_MAX_LINES, quietExitMs, minOutputBytes = 1, sendNotification, progressToken }) {
     if (this.busy) {
-      throw new Error(`Session ${this.id} is busy with a background command. Wait for it to finish, or use terminal_read to check output, or terminal_send_key("ctrl+c") to abort it.`);
+      throw new Error(`Session ${this.id} is busy with a background command. Wait for it to finish, or use terminal_read to check output, or terminal_send_key("ctrl+c") to abort it. For long-running commands (dev servers, watchers) use terminal_run_background instead.`);
     }
     if (!this.alive) {
       throw new Error(`Session ${this.id} is no longer alive.`);
@@ -240,7 +246,7 @@ export class PtySession {
         cwd: this.cwd,
         timedOut,
         ...(quietExited && { quietExited: true }),
-        ...((timedOut || quietExited) && { hint: 'Command is still running in the background. Session remains busy. Use terminal_read to get new output, or terminal_send_key("ctrl+c") to abort.' }),
+        ...((timedOut || quietExited) && { hint: 'Command is still running in the background. Session remains busy. Use terminal_read to get new output, or terminal_send_key("ctrl+c") to abort. Prefer terminal_run_background for long-running commands.' }),
       };
     } catch (err) {
       this.busy = false;
@@ -332,62 +338,49 @@ export class PtySession {
       throw new Error(`Session ${this.id} is no longer alive.`);
     }
 
-    const regex = compileUserRegex(pattern);
+    const regex = compileUserRegex(pattern, 'pattern', WAIT_PATTERN_FLAGS);
     const startTime = Date.now();
-    let collected = '';
     let lastProgressAt = 0;
     const tailTracker = this._createTailTracker();
 
     return new Promise((resolve) => {
-      const cleanup = () => {
+      let settled = false;
+
+      const finish = (matched) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
+        scanner.dispose();
         const idx = this._dataListeners.indexOf(onData);
         if (idx !== -1) this._dataListeners.splice(idx, 1);
+        resolve({
+          output: this._formatWaitOutput(returnMode, () => scanner.text(), tailTracker, scanner.evictedChars > 0),
+          matched,
+          timedOut: !matched,
+        });
       };
 
-      const timer = setTimeout(() => {
-        cleanup();
-        resolve({
-          output: this._formatWaitOutput(stripAnsi(collected), returnMode, tailLines, tailTracker),
-          matched: false,
-          timedOut: true,
-        });
-      }, timeout);
+      const scanner = createThrottledMatcher(regex, {
+        onMatch: () => finish(true),
+        maxRetainedChars: MAX_BUFFER_BYTES,
+      });
+
+      // Final scan before giving up, so output still inside the throttle window counts.
+      const timer = setTimeout(() => finish(scanner.flush()), timeout);
 
       const onData = (data) => {
-        collected += data;
         this._appendToTailTracker(tailTracker, stripAnsi(data), tailLines);
-        const clean = stripAnsi(collected);
-
-        // Send progress notifications
-        if (sendNotification && progressToken && Date.now() - lastProgressAt > 1000) {
+        if (sendNotification && progressToken && Date.now() - lastProgressAt > PROGRESS_INTERVAL_MS) {
           lastProgressAt = Date.now();
-          this._sendProgress(sendNotification, progressToken, clean, startTime, timeout);
+          this._sendProgress(sendNotification, progressToken, this._tailTrackerToOutput(tailTracker), startTime, timeout);
         }
-
-        if (regex.test(clean)) {
-          cleanup();
-          resolve({
-            output: this._formatWaitOutput(clean, returnMode, tailLines, tailTracker),
-            matched: true,
-            timedOut: false,
-          });
-        }
+        scanner.push(data);
       };
 
       // Check existing buffer first
-      const existingClean = stripAnsi(this._buffer);
-      this._appendToTailTracker(tailTracker, existingClean, tailLines);
-      if (regex.test(existingClean)) {
-        clearTimeout(timer);
-        resolve({
-          output: this._formatWaitOutput(existingClean, returnMode, tailLines, tailTracker),
-          matched: true,
-          timedOut: false,
-        });
-        return;
-      }
-      collected = this._buffer;
+      this._appendToTailTracker(tailTracker, stripAnsi(this._buffer), tailLines);
+      scanner.push(this._buffer);
+      if (scanner.flush()) return;
 
       this._dataListeners.push(onData);
     });
@@ -566,25 +559,40 @@ export class PtySession {
 
   /**
    * Kill the PTY process and clean up.
-   * On Unix, kills the entire process group to prevent orphan children.
-   * @param {string} [signal='SIGTERM']
+   * - Unix: signals the whole process group to prevent orphan children.
+   * - Windows: `taskkill /T` the shell's process tree FIRST (parent links must
+   *   still exist to find descendants), then let node-pty release its handles
+   *   and sweep the console process list. node-pty alone misses descendants
+   *   that are not attached to the PTY console (windowsHide/detached children).
+   * @param {NodeJS.Signals} [signal='SIGTERM']
    */
   kill(signal = 'SIGTERM') {
     if (!this.alive) return;
+    const isWindows = this._platform() === 'win32';
     const pid = this.process.pid;
 
-    if (process.platform !== 'win32' && pid) {
-      try {
-        process.kill(-pid, signal);
-      } catch (err) {
-        if (err.code !== 'ESRCH') {
-          try { this.process.kill(signal); } catch {}
-        }
-      }
-    } else {
-      try { this.process.kill(); } catch {}
+    const treeResult = pid
+      ? this._killTree(pid, signal)
+      : { ok: false, reason: 'missing pid' };
+    if (!treeResult.ok) {
+      log(`Session ${this.id}: ${treeResult.reason}; falling back to PTY kill.`);
+    }
+
+    if (isWindows || !treeResult.ok) {
+      // node-pty on Windows rejects signal arguments.
+      try { isWindows ? this.process.kill() : this.process.kill(signal); } catch {}
     }
     this.alive = false;
+  }
+
+  /** Platform hook (overridable in tests). */
+  _platform() {
+    return process.platform;
+  }
+
+  /** Process-tree kill hook (overridable in tests). */
+  _killTree(pid, signal) {
+    return killProcessTree(pid, { platform: this._platform(), signal });
   }
 
   /**
@@ -919,18 +927,19 @@ export class PtySession {
     return [...head, `\n... ${omitted} lines omitted ...\n`, ...tail].join('\n');
   }
 
-  _formatWaitOutput(output, returnMode, tailLines, tailTracker) {
-    const trimmedOutput = output.trim();
-    if (!trimmedOutput || returnMode === 'match-only') {
-      return '';
-    }
+  /**
+   * @param {'tail'|'full'|'match-only'} returnMode
+   * @param {() => string} getFullText - Lazy: only evaluated for 'full'
+   * @param {{ lines: string[], partial: string }} tailTracker
+   * @param {boolean} [truncated]
+   */
+  _formatWaitOutput(returnMode, getFullText, tailTracker, truncated = false) {
+    if (returnMode === 'match-only') return '';
     if (returnMode === 'full') {
-      return trimmedOutput;
+      const text = getFullText().trim();
+      return truncated ? `... [output truncated due to buffer limits] ...\n${text}` : text;
     }
-    if (tailTracker) {
-      return this._tailTrackerToOutput(tailTracker);
-    }
-    return this._tailOutput(trimmedOutput, tailLines);
+    return this._tailTrackerToOutput(tailTracker);
   }
 
   _tailOutput(output, tailLines) {
