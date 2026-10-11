@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.40] - 2026-10-11
+
 ### Added
 - **Background Jobs Tool**: Added `terminal_run_background` and `terminal_job` MCP tools for managing long-running detached processes (like `npm run dev`) natively via `child_process.spawn`. This frees up PTY session slots and avoids locking the session "busy", allowing agents to start servers and continue other work in parallel. Background output is routed to in-memory buffers and rotating disk logs.
 

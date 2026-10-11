@@ -1,7 +1,7 @@
 {
   "serverInfo": {
     "name": "smart-terminal-mcp",
-    "version": "1.2.39"
+    "version": "1.2.40"
   },
   "tools": [
     {
@@ -228,7 +228,7 @@
     },
     {
       "name": "terminal_wait",
-      "description": "Wait for a pattern to appear in terminal output.",
+      "description": "Wait for a pattern in NEW output; echoed input never matches.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -258,11 +258,95 @@
             "minimum": 1,
             "maximum": 1000,
             "default": 50
+          },
+          "since": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Match after char position"
           }
         },
         "required": [
           "sessionId",
           "pattern"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "terminal_run_background",
+      "description": "Start a long-running command as a tracked background job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "waitFor": {
+            "type": "string",
+            "description": "Regex to wait for"
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000,
+            "default": 30000,
+            "description": "waitFor timeout ms"
+          },
+          "maxLines": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 50
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "terminal_job",
+      "description": "Read output from, or stop, a background job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "output",
+              "stop"
+            ],
+            "default": "output"
+          },
+          "since": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Read after char position"
+          },
+          "maxLines": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 200
+          }
+        },
+        "required": [
+          "jobId"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
@@ -298,7 +382,7 @@
     },
     {
       "name": "terminal_list",
-      "description": "List active terminal sessions.",
+      "description": "List active terminal sessions and background jobs.",
       "inputSchema": {
         "type": "object",
         "properties": {
