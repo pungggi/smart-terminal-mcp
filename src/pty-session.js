@@ -316,21 +316,35 @@ export class PtySession {
   }
 
   /**
-   * Wait for a specific pattern in the output.
+   * Wait for a pattern in output produced after a given position.
+   *
+   * Matching starts at `since` — an absolute char position in the same units
+   * as the `position` returned by terminal_read / terminal_watch. When `since`
+   * is omitted it defaults to the stream end at call time, so only output
+   * produced AFTER this call is considered.
+   *
+   * This skips the PTY's input echo by default: the echoed command line
+   * contains any pattern typed in the command (completion markers included)
+   * mid-line, and scanning it produced instant false matches before the
+   * command even ran (issue #12). Pass an explicit `since` (e.g. a position
+   * captured before an exec) to scan retained history from that point.
+   *
    * @param {object} opts
    * @param {string} opts.pattern - String or regex pattern to match
    * @param {number} [opts.timeout=30000]
    * @param {'tail'|'full'|'match-only'} [opts.returnMode='tail']
    * @param {number} [opts.tailLines=50]
+   * @param {number} [opts.since] - Absolute char position to match after; defaults to the stream end at call time
    * @param {Function} [opts.sendNotification]
    * @param {string|number} [opts.progressToken]
-   * @returns {Promise<{ output: string, matched: boolean, timedOut: boolean }>}
+   * @returns {Promise<{ output: string, matched: boolean, timedOut: boolean, position: number }>}
    */
   async waitForPattern({
     pattern,
     timeout = 30000,
     returnMode = DEFAULT_WAIT_RETURN_MODE,
     tailLines = DEFAULT_WAIT_TAIL_LINES,
+    since,
     sendNotification,
     progressToken,
   }) {
@@ -357,6 +371,7 @@ export class PtySession {
           output: this._formatWaitOutput(returnMode, () => scanner.text(), tailTracker, scanner.evictedChars > 0),
           matched,
           timedOut: !matched,
+          position: this._totalBytesEmitted,
         });
       };
 
@@ -377,10 +392,20 @@ export class PtySession {
         scanner.push(data);
       };
 
-      // Check existing buffer first
-      this._appendToTailTracker(tailTracker, stripAnsi(this._buffer), tailLines);
-      scanner.push(this._buffer);
-      if (scanner.flush()) return;
+      // Scan retained output after `since` (skipped by default: the default
+      // anchor is the stream end, so history — including the echoed command
+      // line — never matches; see #12).
+      const sincePosition = since ?? this._totalBytesEmitted;
+      if (sincePosition < this._totalBytesEmitted) {
+        const bufferStart = this._totalBytesEmitted - this._buffer.length;
+        const offset = Math.max(sincePosition, bufferStart) - bufferStart;
+        if (offset < this._buffer.length) {
+          const backlog = this._buffer.slice(Math.max(0, offset));
+          this._appendToTailTracker(tailTracker, stripAnsi(backlog), tailLines);
+          scanner.push(backlog);
+          if (scanner.flush()) return;
+        }
+      }
 
       this._dataListeners.push(onData);
     });

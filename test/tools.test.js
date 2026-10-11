@@ -447,6 +447,44 @@ test('terminal_wait forwards returnMode and tailLines', async () => {
   });
 });
 
+test('terminal_wait forwards since and returns position', async () => {
+  const server = createFakeServer();
+  const waitCalls = [];
+  const manager = {
+    get: () => ({
+      waitForPattern: async (opts) => {
+        waitCalls.push(opts);
+        return { output: 'ready', matched: true, timedOut: false, position: 4242 };
+      },
+    }),
+  };
+
+  const sendNotification = () => { };
+
+  registerTools(server, manager);
+
+  const result = await server.tools.get('terminal_wait').handler(
+    { sessionId: 's1', pattern: 'ready', timeout: 5000, returnMode: 'tail', tailLines: 10, since: 100 },
+    { sendNotification }
+  );
+
+  assert.deepEqual(waitCalls, [{
+    pattern: 'ready',
+    timeout: 5000,
+    returnMode: 'tail',
+    tailLines: 10,
+    since: 100,
+    sendNotification,
+    progressToken: undefined,
+  }]);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    output: 'ready',
+    matched: true,
+    timedOut: false,
+    position: 4242,
+  });
+});
+
 test('terminal_retry returns retry results as compact JSON', async () => {
   process.env.SMART_TERMINAL_DISABLED_TOOLS = '';
   try {

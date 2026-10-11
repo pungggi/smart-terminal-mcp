@@ -10,6 +10,8 @@ function createWaitSession(buffer = '') {
   const session = createSession();
   session.alive = true;
   session._buffer = buffer;
+  // Mirror the real stream: the seeded buffer is the entire output so far.
+  session._totalBytesEmitted = buffer.length;
   session._dataListeners = [];
   return session;
 }
@@ -186,51 +188,100 @@ test('getInfo can return minimal terminal_list metadata', () => {
   });
 });
 
-test('waitForPattern returns only the tail by default', async () => {
+/** Emit a chunk the way the real onData handler would (buffer + counter + listeners). */
+function emitChunk(session, data) {
+  session._buffer += data;
+  session._totalBytesEmitted += data.length;
+  session._dataListeners.at(-1)(data);
+}
+
+test('waitForPattern ignores pre-existing output by default (echo race, #12)', async () => {
+  // The echoed wrapped command contains the marker mid-line; scanning history
+  // matched this instantly before the command even ran.
+  const echo = 'Write-Host "__MCP_PRE_x__"; npx vitest run; Write-Host "__MCP_DONE_abc__${LASTEXITCODE}__"\r\n';
+  const session = createWaitSession(echo);
+
+  const result = await session.waitForPattern({ pattern: '__MCP_DONE_abc__', timeout: 30 });
+
+  assert.equal(result.matched, false);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.output, '');
+  assert.equal(result.position, echo.length);
+});
+
+test('waitForPattern matches new output produced after the call', async () => {
+  const session = createWaitSession('Write-Host "__MCP_DONE_abc__..."\r\n');
+  const waitPromise = session.waitForPattern({ pattern: '__MCP_DONE_abc__', timeout: 2000 });
+
+  // The real marker line arrives as a standalone line once the command ends.
+  emitChunk(session, 'test 1 passed\n__MCP_DONE_abc__0__\n');
+
+  const result = await waitPromise;
+  assert.equal(result.matched, true);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.output, 'test 1 passed\n__MCP_DONE_abc__0__');
+  assert.equal(result.position, session._totalBytesEmitted);
+});
+
+test('waitForPattern scans retained history from an explicit since', async () => {
   const session = createWaitSession('line 1\nline 2\nline 3\nready\n');
 
-  const result = await session.waitForPattern({ pattern: 'ready', tailLines: 2, timeout: 50 });
+  const result = await session.waitForPattern({ pattern: 'ready', since: 0, tailLines: 2, timeout: 50 });
 
   assert.deepEqual(result, {
     output: 'line 3\nready',
     matched: true,
     timedOut: false,
+    position: session._totalBytesEmitted,
   });
+});
+
+test('waitForPattern clamps since to the retained buffer', async () => {
+  // Older positions are clamped to the buffer start (evicted history is gone).
+  const session = createWaitSession('evicted prefix…\nready\n');
+  session._totalBytesEmitted += 5000;
+
+  const result = await session.waitForPattern({ pattern: 'ready', since: 0, timeout: 50 });
+
+  assert.equal(result.matched, true);
 });
 
 test('waitForPattern can return the full output', async () => {
   const session = createWaitSession('line 1\nline 2\nready\n');
 
-  const result = await session.waitForPattern({ pattern: 'ready', returnMode: 'full', tailLines: 1, timeout: 50 });
+  const result = await session.waitForPattern({ pattern: 'ready', since: 0, returnMode: 'full', tailLines: 1, timeout: 50 });
 
   assert.deepEqual(result, {
     output: 'line 1\nline 2\nready',
     matched: true,
     timedOut: false,
+    position: session._totalBytesEmitted,
   });
 });
 
 test('waitForPattern can suppress output entirely', async () => {
   const session = createWaitSession('booting\nready\n');
 
-  const result = await session.waitForPattern({ pattern: 'ready', returnMode: 'match-only', timeout: 50 });
+  const result = await session.waitForPattern({ pattern: 'ready', since: 0, returnMode: 'match-only', timeout: 50 });
 
   assert.deepEqual(result, {
     output: '',
     matched: true,
     timedOut: false,
+    position: session._totalBytesEmitted,
   });
 });
 
 test('waitForPattern returns only the configured tail on timeout', async () => {
   const session = createWaitSession('line 1\nline 2\nline 3\n');
 
-  const result = await session.waitForPattern({ pattern: 'ready', tailLines: 1, timeout: 20 });
+  const result = await session.waitForPattern({ pattern: 'ready', since: 0, tailLines: 1, timeout: 20 });
 
   assert.deepEqual(result, {
     output: 'line 3',
     matched: false,
     timedOut: true,
+    position: session._totalBytesEmitted,
   });
 });
 

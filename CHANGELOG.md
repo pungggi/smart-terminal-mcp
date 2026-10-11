@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **Windows Zombie Processes**: Implemented cross-platform process tree killing (`taskkill /T /F` on Windows) for PTY sessions. This ensures that web servers and scripts launched inside a PowerShell PTY do not become permanently orphaned zombies (which block ports) when the session is closed.
 - **Regex CPU Thrashing**: Replaced O(n²) string building and full-buffer regex matching in `waitForPattern` with an O(n) chunked stream incremental matcher. This prevents Node.js event loop blocks and CPU thrashing when processing massive output streams. Added support for evaluating multi-line `^`/`$` anchor semantics per-chunk.
+- **`terminal_wait` matched the input echo (#12)**: `waitForPattern` scanned the session's retained buffer including the PTY's input echo, so any pattern also present in the submitted command line (notably smart-terminal-mcp's own `__MCP_PRE_`/`__MCP_DONE_` completion markers, which appear mid-line in the echoed wrapped command) matched instantly before the command produced output. Waiting now anchors at the stream end by default — only output produced after the call matches — and accepts an explicit `since` char position (same units as `terminal_read`'s `position`) to scan retained history from a caller-chosen point. The result additionally returns the current `position` for chaining.
 
 ## [1.2.39] - 2026-09-05
 
