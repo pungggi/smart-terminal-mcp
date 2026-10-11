@@ -276,7 +276,7 @@ Read buffered output with idle detection. Large outputs are truncated to head + 
 
 ### `terminal_wait`
 
-Wait for a specific pattern in the output stream. Only output produced **after the call** is matched by default — the echoed command line (which contains any pattern you typed, completion markers included) never triggers a match. Pass `since` (a `position` captured earlier from `terminal_read`/`terminal_wait`/`terminal_watch`) to also scan retained history from that point. By default, responses return only the last `tailLines`; use `returnMode: "full"` for the full matched output or `"match-only"` to suppress output entirely. If the MCP client sends a `progressToken`, long-running waits may also emit best-effort `notifications/progress` updates.
+Wait for a specific pattern in the output stream. Only output produced **after the call** is matched by default — the echoed command line (which contains any pattern you typed, completion markers included) never triggers a match, including an echo that is still streaming in when the wait starts (written input is remembered and masked until its echo arrives or mismatches). Pass `since` (a `position` captured earlier from `terminal_read`/`terminal_wait`/`terminal_watch`) to also scan retained history from that point; a `since` beyond the current stream end acts as a future cursor (live data before it is skipped). By default, responses return only the last `tailLines`; use `returnMode: "full"` for the full matched output or `"match-only"` to suppress output entirely. If the MCP client sends a `progressToken`, long-running waits may also emit best-effort `notifications/progress` updates.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -285,7 +285,7 @@ Wait for a specific pattern in the output stream. Only output produced **after t
 | `timeout` | number | 30000 | Timeout in ms |
 | `returnMode` | string | `"tail"` | Response mode: `tail`, `full`, `match-only` |
 | `tailLines` | number | 50 | Number of tail lines to return |
-| `since` | number | -- | Char position to match after; default is the stream end at call time |
+| `since` | number | -- | Char position to match after; default is the stream end at call time (a future position is honored once output reaches it) |
 
 **Returns**: `output`, `matched`, `timedOut`, `position` (`output` may be empty in `match-only` mode)
 

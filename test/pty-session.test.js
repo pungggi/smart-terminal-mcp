@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSessionEnv, PtySession } from '../src/pty-session.js';
+import { buildSessionEnv, consumeEchoPrefix, PtySession } from '../src/pty-session.js';
 
 function createSession() {
   return Object.create(PtySession.prototype);
@@ -292,6 +292,115 @@ test('waitForPattern rejects invalid regex patterns', async () => {
     session.waitForPattern({ pattern: '(', timeout: 20 }),
     /Invalid regex pattern in pattern/
   );
+});
+
+test('waitForPattern honors a future since cursor: live data before it is skipped', async () => {
+  // _totalBytesEmitted = 0, since = 10: the first 10 emitted chars never match.
+  const session = createWaitSession('');
+  const waitPromise = session.waitForPattern({ pattern: 'ready', since: 10, timeout: 3000 });
+
+  emitChunk(session, 'aready\n'); // 7 chars, all before the cursor
+  emitChunk(session, 'bcd'); // 10th char crossed: only 'd' is after the cursor
+
+  const result = await waitPromise;
+  assert.equal(result.matched, false, 'data entirely before the cursor must not match');
+  assert.equal(result.position, 10);
+});
+
+test('waitForPattern future since cursor slices exactly at the char boundary', async () => {
+  const session = createWaitSession('');
+  // 'rea' lands before the cursor, 'dy\n' after it: no match.
+  const noMatch = session.waitForPattern({ pattern: 'ready', since: 3, timeout: 80 });
+  emitChunk(session, 'ready\n');
+  assert.equal((await noMatch).matched, false);
+
+  // Same split, but the pattern lives fully after the cursor: match.
+  const session2 = createWaitSession('');
+  const match = session2.waitForPattern({ pattern: 'dy', since: 3, timeout: 3000 });
+  emitChunk(session2, 'ready\n');
+  assert.equal((await match).matched, true);
+});
+
+test('waitForPattern masks a delayed input echo (write-then-wait race, #12)', async () => {
+  const session = createWaitSession('');
+  // Simulate terminal_write of a marker-bearing command just before the wait:
+  // its echo has not arrived yet. Register exactly like write() does.
+  session.process = { write: () => {} };
+  session.write('sleep 10; echo __MCP_DONE_abc__\r');
+
+  const waitPromise = session.waitForPattern({ pattern: '__MCP_DONE_abc__', timeout: 3000 });
+
+  // The echo streams in after the wait started (new data by position), with
+  // PTY artifacts: \r\n expansion and a line wrap mid-echo.
+  emitChunk(session, 'sleep 10;\r\necho __MCP_DONE_abc__\r\n');
+
+  // The command is still sleeping — a grace wait proves no match fired on the echo.
+  const grace = await session.waitForPattern({ pattern: 'SETTLED', timeout: 40 });
+  assert.equal(grace.matched, false);
+
+  // Real marker output eventually arrives and matches.
+  emitChunk(session, 'wakeup\n__MCP_DONE_abc__0__\n');
+  const result = await waitPromise;
+  assert.equal(result.matched, true);
+  assert.equal(result.output, 'wakeup\n__MCP_DONE_abc__0__');
+});
+
+test('waitForPattern echo mask releases on mismatch so real output matches', async () => {
+  const session = createWaitSession('');
+  session.process = { write: () => {} };
+  session.write('echo AAA\r');
+
+  const waitPromise = session.waitForPattern({ pattern: 'AAA-really', timeout: 3000 });
+
+  // Unrelated output (not the echo) releases the mask immediately.
+  emitChunk(session, 'booting services\n');
+  // Real output that happens to contain the pending text still matches.
+  emitChunk(session, 'AAA-really here\n');
+
+  const result = await waitPromise;
+  assert.equal(result.matched, true);
+});
+
+test('write registers pending echo; consumption clears it for later waits', async () => {
+  const session = createWaitSession('');
+  session.process = { write: () => {} };
+
+  session.write('echo __MCP_DONE_abc__\r');
+  assert.equal(session._pendingEcho, 'echo __MCP_DONE_abc__');
+
+  // The echo arrives: the session-level expectation is consumed centrally.
+  session._consumePendingEchoData('echo __MCP_DONE_abc__\r\n');
+  assert.equal(session._pendingEcho, '');
+
+  // A wait started afterwards is not armed against stale input: real output
+  // that repeats the command text must still match.
+  const waitPromise = session.waitForPattern({ pattern: '__MCP_DONE_abc__', timeout: 3000 });
+  emitChunk(session, '__MCP_DONE_abc__ real output\n');
+  assert.equal((await waitPromise).matched, true);
+});
+
+test('consumeEchoPrefix consumes, spans chunks, and releases on mismatch', () => {
+  // Full consume with echo artifacts inside the span (\r\n expansion + wrap).
+  const full = consumeEchoPrefix('sleep 10; echo X', 'sleep 10;\r\necho X\r\n');
+  assert.equal(full.echo, '');
+  assert.equal(full.chunk, '\r\n');
+
+  // Echo spanning two chunks: prefix consumed, remainder expected.
+  const part = consumeEchoPrefix('sleep 10; echo X', 'sleep 1');
+  assert.equal(part.echo, '0; echo X');
+  assert.equal(part.chunk, '');
+  const rest = consumeEchoPrefix(part.echo, '0; echo X\r\n');
+  assert.equal(rest.echo, '');
+  assert.equal(rest.chunk, '\r\n');
+
+  // Whitespace-only chunk between echo fragments keeps the expectation.
+  const ws = consumeEchoPrefix('abc', '\r\n');
+  assert.equal(ws.echo, 'abc');
+
+  // Mismatch releases immediately; the chunk passes through untouched.
+  const miss = consumeEchoPrefix('abc', 'xyz abc');
+  assert.equal(miss.echo, '');
+  assert.equal(miss.chunk, 'xyz abc');
 });
 
 test('_readUntilIdle collects streamed data even if the buffer shifts', async () => {
