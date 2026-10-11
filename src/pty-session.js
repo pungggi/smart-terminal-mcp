@@ -21,6 +21,57 @@ const DEFAULT_WAIT_TAIL_LINES = 50;
 /** Wait patterns are scanned in windows, so `^`/`$` use per-line semantics. */
 export const WAIT_PATTERN_FLAGS = 'm';
 const PROGRESS_INTERVAL_MS = 1000;
+/** Written input whose echo has not arrived yet is dropped after this long,
+ *  so a never-echoed write (password prompt, echo off) cannot arm the
+ *  echo mask against unrelated output indefinitely. */
+const PENDING_ECHO_RELEASE_MS = 5000;
+/** Cap on tracked pending input; long pastes only need their tail masked. */
+const MAX_PENDING_ECHO_CHARS = 8192;
+
+/**
+ * Consume a pending input echo from the front of a cleaned output chunk
+ * (ANSI already stripped; newlines KEPT for the caller's line semantics).
+ *
+ * PTYs echo `\r` as `\r\n` and wrap long input lines at the terminal width,
+ * so comparison is whitespace-insensitive (newlines inside the consumed span
+ * are artifacts and dropped with it; a wrap point can also swallow a space,
+ * so spaces/tabs on either side are skipped). Consumption is ordered and
+ * best-effort: the echo is the next thing the terminal emits after a write,
+ * so a matching prefix is almost always the echo. On mismatch the expectation
+ * is released immediately (returns echo: '') so real output is never masked
+ * for longer than one chunk; a whitespace-only chunk (e.g. a lone `\r\n`
+ * between echo fragments) keeps the expectation alive.
+ *
+ * @param {string} echo - Normalized written input (no ANSI/newlines/controls).
+ * @param {string} chunk - Cleaned output chunk.
+ * @returns {{ echo: string, chunk: string }} remaining expectation + chunk with the echo prefix removed
+ */
+export function consumeEchoPrefix(echo, chunk) {
+  if (!echo) return { echo: '', chunk };
+  let i = 0;
+  let count = 0;
+  while (count < echo.length && i < chunk.length) {
+    const ch = chunk[i];
+    if (ch === '\r' || ch === '\n' || ch === ' ' || ch === '\t') {
+      i++;
+      continue;
+    }
+    const e = echo[count];
+    if (e === '\r' || e === '\n' || e === ' ' || e === '\t') {
+      count++;
+      continue;
+    }
+    if (ch !== e) break;
+    count++;
+    i++;
+  }
+  if (count === 0) {
+    // Not the echo (or it will never arrive): release, unless this chunk is
+    // only whitespace between two fragments of a spanning echo.
+    return { echo: chunk.trim() === '' ? echo : '', chunk };
+  }
+  return { echo: echo.slice(count), chunk: chunk.slice(i) };
+}
 
 export function buildSessionEnv(customEnv = {}, platformName = platform()) {
   const env = {
@@ -130,6 +181,12 @@ export class PtySession {
     this._markerScanCursor = 0;
     /** @type {{ marker: string, withExit: RegExp, plain: RegExp } | null} */
     this._markerMatcherCache = null;
+    /** Written input whose echo may not have arrived yet (normalized: no
+     *  ANSI, newlines or control chars). Consumed by _consumePendingEchoData
+     *  as the echo streams in; see consumeEchoPrefix. */
+    this._pendingEcho = '';
+    /** When _pendingEcho was last extended/renewed. */
+    this._pendingEchoAt = 0;
 
     const env = buildSessionEnv(customEnv);
 
@@ -144,6 +201,7 @@ export class PtySession {
 
     this.process.onData((data) => {
       this.lastActivity = Date.now();
+      this._consumePendingEchoData(data);
       this._buffer += data;
       this._totalBytesEmitted += data.length;
 
@@ -224,6 +282,10 @@ export class PtySession {
 
     try {
       this.process.write(wrappedCommand + '\r');
+      // The echo of the wrapped command can still be streaming when a
+      // concurrent/later waitForPattern anchors at the stream end (slow
+      // winpty/cmd input echo); remember it so it can be masked.
+      this._registerPendingEcho(wrappedCommand + '\r');
 
       const { buffer: raw, reason } = await this._waitForMarker(marker, timeout, quietExitMs, minOutputBytes, sendNotification, progressToken);
       const markerFound = reason === 'marker';
@@ -264,10 +326,42 @@ export class PtySession {
       throw new Error(`Session ${this.id} is no longer alive.`);
     }
     this.process.write(data);
+    this._registerPendingEcho(data);
     if (data.includes('\x03') || data.includes('\x04')) {
       this.busy = false;
       this._pendingMarker = null;
     }
+  }
+
+  /**
+   * Remember written input so its (possibly delayed) echo can be masked
+   * from pattern matching. Best-effort: control sequences and newlines are
+   * normalized away; echoes that never arrive age out after
+   * PENDING_ECHO_RELEASE_MS.
+   * @param {string} data
+   */
+  _registerPendingEcho(data) {
+    const flat = stripAnsi(data)
+      .replace(/[\r\n]+/g, '')
+      .replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+    if (!flat) return;
+    this._pendingEcho = ((this._pendingEcho || '') + flat).slice(-MAX_PENDING_ECHO_CHARS);
+    this._pendingEchoAt = Date.now();
+  }
+
+  /**
+   * Consume the session-level pending echo expectation as output arrives,
+   * so a later waitForPattern is not armed against already-echoed input
+   * (stale masking of real output).
+   * @param {string} data
+   */
+  _consumePendingEchoData(data) {
+    if (!this._pendingEcho) return;
+    if (Date.now() - this._pendingEchoAt > PENDING_ECHO_RELEASE_MS) {
+      this._pendingEcho = '';
+      return;
+    }
+    this._pendingEcho = consumeEchoPrefix(this._pendingEcho, stripAnsi(data)).echo;
   }
 
   /**
@@ -316,21 +410,38 @@ export class PtySession {
   }
 
   /**
-   * Wait for a specific pattern in the output.
+   * Wait for a pattern in output produced after a given position.
+   *
+   * Matching starts at `since` — an absolute char position in the same units
+   * as the `position` returned by terminal_read / terminal_watch. When `since`
+   * is omitted it defaults to the stream end at call time, so only output
+   * produced AFTER this call is considered.
+   *
+   * This skips the PTY's input echo by default: the echoed command line
+   * contains any pattern typed in the command (completion markers included)
+   * mid-line, and scanning it produced instant false matches before the
+   * command even ran (issue #12). An echo that is still streaming in when
+   * the wait starts is masked content-wise (see consumeEchoPrefix). Pass an
+   * explicit `since` (e.g. a position captured before an exec) to scan
+   * retained history from that point; a since beyond the current stream end
+   * is honored as a future cursor (live data before it is skipped).
+   *
    * @param {object} opts
    * @param {string} opts.pattern - String or regex pattern to match
    * @param {number} [opts.timeout=30000]
    * @param {'tail'|'full'|'match-only'} [opts.returnMode='tail']
    * @param {number} [opts.tailLines=50]
+   * @param {number} [opts.since] - Absolute char position to match after; defaults to the stream end at call time
    * @param {Function} [opts.sendNotification]
    * @param {string|number} [opts.progressToken]
-   * @returns {Promise<{ output: string, matched: boolean, timedOut: boolean }>}
+   * @returns {Promise<{ output: string, matched: boolean, timedOut: boolean, position: number }>}
    */
   async waitForPattern({
     pattern,
     timeout = 30000,
     returnMode = DEFAULT_WAIT_RETURN_MODE,
     tailLines = DEFAULT_WAIT_TAIL_LINES,
+    since,
     sendNotification,
     progressToken,
   }) {
@@ -357,6 +468,7 @@ export class PtySession {
           output: this._formatWaitOutput(returnMode, () => scanner.text(), tailTracker, scanner.evictedChars > 0),
           matched,
           timedOut: !matched,
+          position: this._totalBytesEmitted,
         });
       };
 
@@ -368,19 +480,63 @@ export class PtySession {
       // Final scan before giving up, so output still inside the throttle window counts.
       const timer = setTimeout(() => finish(scanner.flush()), timeout);
 
-      const onData = (data) => {
-        this._appendToTailTracker(tailTracker, stripAnsi(data), tailLines);
+      const onData = (rawData) => {
+        // Future cursors: skip live data until the absolute stream position
+        // passes sincePosition, slicing exactly at the char boundary.
+        let data = rawData;
+        if (livePos < sincePosition) {
+          livePos += rawData.length;
+          const beyond = livePos - sincePosition;
+          if (beyond <= 0) return;
+          data = rawData.slice(rawData.length - beyond);
+        } else {
+          livePos += rawData.length;
+        }
+
+        feed(data, true);
         if (sendNotification && progressToken && Date.now() - lastProgressAt > PROGRESS_INTERVAL_MS) {
           lastProgressAt = Date.now();
           this._sendProgress(sendNotification, progressToken, this._tailTrackerToOutput(tailTracker), startTime, timeout);
         }
-        scanner.push(data);
       };
 
-      // Check existing buffer first
-      this._appendToTailTracker(tailTracker, stripAnsi(this._buffer), tailLines);
-      scanner.push(this._buffer);
-      if (scanner.flush()) return;
+      /**
+       * Feed cleaned output into the matcher. Live data additionally passes
+       * through the pending-echo mask: input whose echo has not arrived yet
+       * (written via terminal_write / a wrapped exec just before this call)
+       * is still "new" by position, but it is our own input coming back —
+       * consume it so a delayed echo can never satisfy the pattern (#12).
+       */
+      const feed = (rawText, maskEcho) => {
+        let clean = stripAnsi(rawText);
+        if (maskEcho && echoRemaining) {
+          const consumed = consumeEchoPrefix(echoRemaining, clean);
+          echoRemaining = consumed.echo;
+          clean = consumed.chunk;
+        }
+        this._appendToTailTracker(tailTracker, clean, tailLines);
+        scanner.push(clean);
+      };
+
+      const sincePosition = since ?? this._totalBytesEmitted;
+      // Absolute position of the next live chunk's first char.
+      let livePos = this._totalBytesEmitted;
+      // Session-level pending echo at call time; consumed locally as live
+      // data arrives (the session tracks its own copy for later waits).
+      let echoRemaining = this._pendingEcho || '';
+
+      // Scan retained output after `since` (skipped by default: the default
+      // anchor is the stream end, so history — including the echoed command
+      // line — never matches; see #12). History is fed unmasked: an explicit
+      // past cursor opts into scanning what already arrived, echo included.
+      if (sincePosition < this._totalBytesEmitted) {
+        const bufferStart = this._totalBytesEmitted - this._buffer.length;
+        const offset = Math.max(sincePosition, bufferStart) - bufferStart;
+        if (offset < this._buffer.length) {
+          feed(this._buffer.slice(Math.max(0, offset)), false);
+          if (scanner.flush()) return;
+        }
+      }
 
       this._dataListeners.push(onData);
     });
@@ -582,6 +738,7 @@ export class PtySession {
       // node-pty on Windows rejects signal arguments.
       try { isWindows ? this.process.kill() : this.process.kill(signal); } catch {}
     }
+    this._pendingEcho = '';
     this.alive = false;
   }
 

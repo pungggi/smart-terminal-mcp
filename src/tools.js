@@ -333,21 +333,24 @@ export function registerTools(server, manager) {
   // --- terminal_wait ---
   tool(
     'terminal_wait',
-    'Wait for a pattern to appear in terminal output.',
+    'Wait for a pattern in NEW output; echoed input never matches.',
     {
       sessionId: z.string(),
       pattern: z.string(),
       timeout: z.number().int().min(1000).max(600000).default(30000),
       returnMode: z.enum(['tail', 'full', 'match-only']).default('tail'),
       tailLines: z.number().int().min(1).max(1000).default(50),
+      since: z.number().int().min(0).optional()
+        .describe('Match after char position'),
     },
-    async ({ sessionId, pattern, timeout, returnMode, tailLines }, extra) => {
+    async ({ sessionId, pattern, timeout, returnMode, tailLines, since }, extra) => {
       const session = manager.get(sessionId);
       const result = await session.waitForPattern({
         pattern,
         timeout,
         returnMode,
         tailLines,
+        ...(since !== undefined && { since }),
         sendNotification: extra.sendNotification,
         progressToken: extra._meta?.progressToken,
       });
