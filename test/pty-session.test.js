@@ -275,20 +275,26 @@ test('exec fails fast on here-string/heredoc commands without writing to the PTY
 test('_continuationHint names the stuck prompt on timeout', () => {
   const session = createSession();
 
+  session.shellType = 'powershell';
   const ps = session._continuationHint('PS C:\\repo> gh pr create --body @\'\r\n>> ');
   assert.match(ps, /continuation prompt \(>>\)/);
   assert.match(ps, /terminal_write/);
 
+  session.shellType = undefined;
   const posix = session._continuationHint('$ cat <<EOF\r\nbody\r\n> ');
   assert.match(posix, /continuation prompt \(>\)/);
   assert.match(posix, /heredoc/);
 
+  session.shellType = 'cmd';
   const cmdMore = session._continuationHint('C:\\repo> echo "open\r\nMore? ');
   assert.match(cmdMore, /More\?/);
+  session.shellType = undefined;
 
   // Normal trailing prompt/output: no continuation hint. A PowerShell PRIMARY
   // prompt ends in a single `>` — must NOT be treated as continuation.
+  session.shellType = 'powershell';
   assert.equal(session._continuationHint('done\r\nPS C:\\repo> '), null);
+  session.shellType = undefined;
   assert.equal(session._continuationHint(''), null);
   assert.equal(session._continuationHint('done\r\nuser@host:~$ '), null);
   // ANSI-colored prompt must not defeat detection.
