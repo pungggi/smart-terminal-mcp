@@ -5,9 +5,10 @@ import { resolve, dirname } from 'node:path';
 import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, runCommand } from './command-runner.js';
 import { normalizeCommandName, summarizeCommandOutput } from './command-parsers.js';
 import { DEFAULT_PAGE_SIZE, paginateOutput } from './pager.js';
-import { DEFAULT_EXEC_MAX_LINES, DEFAULT_HISTORY_FORMAT, DEFAULT_HISTORY_LIMIT, DEFAULT_READ_MAX_LINES } from './pty-session.js';
+import { DEFAULT_EXEC_MAX_BYTES, DEFAULT_EXEC_MAX_LINES, DEFAULT_HISTORY_FORMAT, DEFAULT_HISTORY_LIMIT, DEFAULT_READ_MAX_LINES } from './pty-session.js';
 import { DEFAULT_JOB_READ_MAX_LINES } from './background-jobs.js';
 import { execAndDiff, execWithRetry } from './smart-tools.js';
+import { log } from './logger.js';
 
 const DEFAULT_JOB_TAIL_LINES = 50;
 
@@ -136,19 +137,25 @@ export function registerTools(server, manager) {
     {
       sessionId: z.string(),
       command: z.string(),
+      description: z.string().optional()
+        .describe('Why: recorded in audit log'),
       timeout: z.number().int().min(1000).max(600000).default(30000),
       maxLines: z.number().int().min(10).max(10000).default(DEFAULT_EXEC_MAX_LINES),
+      maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_EXEC_MAX_BYTES)
+        .describe('Total output byte cap'),
       quietExitMs: z.number().int().min(500).max(600000).optional()
         .describe('Exit if silent for N ms'),
       minOutputBytes: z.number().int().min(0).default(1)
         .describe('Min bytes before quiet exit'),
     },
-    async ({ sessionId, command, timeout, maxLines, quietExitMs, minOutputBytes }, extra) => {
+    async ({ sessionId, command, description, timeout, maxLines, maxOutputBytes, quietExitMs, minOutputBytes }, extra) => {
       const session = manager.get(sessionId);
+      if (description) log(`exec [${sessionId}] (${description}): ${command}`);
       const result = await session.exec({
         command,
         timeout,
         maxLines,
+        maxOutputBytes,
         quietExitMs,
         minOutputBytes,
         sendNotification: extra.sendNotification,
@@ -166,6 +173,8 @@ export function registerTools(server, manager) {
       cmd: z.string(),
       args: z.array(z.string()).default([]),
       cwd: z.string().optional(),
+      description: z.string().optional()
+        .describe('Why: recorded in audit log'),
       timeout: z.number().int().min(1000).max(600000).default(DEFAULT_TIMEOUT_MS),
       maxOutputBytes: z.number().int().min(1024).max(1048576).default(DEFAULT_MAX_OUTPUT_BYTES),
       parse: z.boolean().default(true).describe('Parse structured output'),
@@ -176,7 +185,8 @@ export function registerTools(server, manager) {
       successFilePattern: z.string().optional().describe('Regex'),
       shell: z.boolean().default(false).describe('Run via system shell'),
     },
-    async ({ cmd, args, cwd, timeout, maxOutputBytes, parse, parseOnly, summary, successExitCode, successFile, successFilePattern, shell }) => {
+    async ({ cmd, args, cwd, description, timeout, maxOutputBytes, parse, parseOnly, summary, successExitCode, successFile, successFilePattern, shell }) => {
+      if (description) log(`run (${description}): ${cmd} ${args.join(' ')}`.trimEnd());
       const result = await runCommand({
         cmd,
         args,
@@ -417,17 +427,24 @@ export function registerTools(server, manager) {
   // --- terminal_job ---
   tool(
     'terminal_job',
-    'Read output from, or stop, a background job.',
+    'Read output from, wait for, or stop a background job.',
     {
       jobId: z.string(),
-      action: z.enum(['output', 'stop']).default('output'),
+      action: z.enum(['output', 'wait', 'stop']).default('output'),
+      timeout: z.number().int().min(1000).max(600000).default(30000)
+        .describe('wait timeout before giving up'),
       since: z.number().int().min(0).optional()
         .describe('Read after char position'),
       maxLines: z.number().int().min(1).max(10000).default(DEFAULT_JOB_READ_MAX_LINES),
     },
-    async ({ jobId, action, since, maxLines }) => {
+    async ({ jobId, action, timeout, since, maxLines }) => {
       if (action === 'stop') {
         return jsonContent({ success: true, job: manager.jobs.stop(jobId) });
+      }
+      if (action === 'wait') {
+        const job = manager.jobs.get(jobId);
+        const result = await job.waitUntilExit({ timeout, maxLines });
+        return jsonContent({ jobId, ...result });
       }
       const job = manager.jobs.get(jobId);
       return jsonContent({ jobId, ...job.read({ since, maxLines }) });

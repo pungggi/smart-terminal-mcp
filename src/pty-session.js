@@ -13,6 +13,13 @@ const HISTORY_MAX_LINES = 10_000;
 const BANNER_WAIT_MS = 2000;
 const BANNER_IDLE_MS = 500;
 export const DEFAULT_EXEC_MAX_LINES = 200;
+export const DEFAULT_EXEC_MAX_BYTES = 128 * 1024;
+/** Cap applied to any single output line: maxLines says nothing about line width,
+ *  and one giant line (minified bundle, base64 blob) would otherwise blow the
+ *  caller's context. Head + notice + tail keeps both ends visible. */
+const MAX_LINE_CHARS = 2000;
+const LINE_HEAD_CHARS = 1000;
+const LINE_TAIL_CHARS = 400;
 export const DEFAULT_READ_MAX_LINES = 200;
 export const DEFAULT_HISTORY_LIMIT = 200;
 export const DEFAULT_HISTORY_FORMAT = 'lines';
@@ -257,14 +264,15 @@ export class PtySession {
    * @param {object} opts
    * @param {string} opts.command
    * @param {number} [opts.timeout=30000]
-   * @param {number} [opts.maxLines=100]
+   * @param {number} [opts.maxLines=200]
+   * @param {number} [opts.maxOutputBytes=131072] - Total output byte cap
    * @param {number} [opts.quietExitMs] - Return early if output is silent for this long after first output
    * @param {number} [opts.minOutputBytes=1] - Require at least this many bytes before quiet detection
    * @param {Function} [opts.sendNotification] - MCP sendNotification function for progress
    * @param {string|number} [opts.progressToken] - Progress token from client
    * @returns {Promise<{ output: string, exitCode: number|null, cwd: string|null, timedOut: boolean, quietExited?: boolean, hint?: string }>}
    */
-  async exec({ command, timeout = 30000, maxLines = DEFAULT_EXEC_MAX_LINES, quietExitMs, minOutputBytes = 1, sendNotification, progressToken }) {
+  async exec({ command, timeout = 30000, maxLines = DEFAULT_EXEC_MAX_LINES, maxOutputBytes = DEFAULT_EXEC_MAX_BYTES, quietExitMs, minOutputBytes = 1, sendNotification, progressToken }) {
     if (this.busy) {
       throw new Error(`Session ${this.id} is busy with a background command. Wait for it to finish, or use terminal_read to check output, or terminal_send_key("ctrl+c") to abort it. For long-running commands (dev servers, watchers) use terminal_run_background instead.`);
     }
@@ -303,7 +311,7 @@ export class PtySession {
       }
 
       return {
-        output: this._truncateOutput(output, maxLines),
+        output: this._truncateBytes(this._truncateOutput(output, maxLines), maxOutputBytes),
         exitCode: markerFound ? exitCode : null,
         cwd: this.cwd,
         timedOut,
@@ -739,7 +747,26 @@ export class PtySession {
       try { isWindows ? this.process.kill() : this.process.kill(signal); } catch {}
     }
     this._pendingEcho = '';
+    // node-pty's winpty path never releases its pipe sockets or its conout
+    // worker thread on kill() (the ConPTY path disposes them, winpty does
+    // not). Each leaked socket/worker keeps the event loop alive forever, so
+    // a server that stops sessions would accumulate dead handles. Release
+    // them explicitly.
+    this._releasePtyResources();
     this.alive = false;
+  }
+
+  /** Release node-pty's leftover pipes and conout worker (no-op when absent). */
+  _releasePtyResources() {
+    const agent = this.process?._agent;
+    for (const socket of [this.process?._socket, agent?.inSocket]) {
+      try { socket?.destroy?.(); } catch {
+        // Best-effort cleanup; never mask the original kill result.
+      }
+    }
+    try { agent?._conoutSocketWorker?.dispose?.(); } catch {
+      // Same: dispose schedules worker termination, it never throws loudly.
+    }
   }
 
   /** Platform hook (overridable in tests). */
@@ -846,9 +873,27 @@ export class PtySession {
   _wrapCommand(command, marker, cwdMarker, preMarker) {
     switch (this.shellType) {
       case 'powershell':
-        return `Write-Host "${preMarker}"; ${command}; Write-Host "${marker}_\${LASTEXITCODE}__"; Write-Host "${cwdMarker}$((Get-Location).Path)__"`;
+        // $LASTEXITCODE is only set by native executables: without clearing it,
+        // a stale value from an earlier command (or $null after cmdlet-only
+        // commands) would report the wrong exit code. Clear it first, then
+        // derive the code from $? so cmdlets and native commands are both
+        // reported accurately.
+        return `Write-Host "${preMarker}"; $global:LASTEXITCODE = $null; ${command}; ` +
+          `$__mcp_rc = if ($?) { if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 } } ` +
+          `else { if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 } }; ` +
+          // ${__mcp_rc} is PS's braced-variable form: bare $__mcp_rc__ would
+          // parse as a variable named "__mcp_rc__" (undefined) because
+          // underscores are valid name chars. JS needs \${ to emit it literally.
+          `Write-Host "${marker}_\${__mcp_rc}__"; Write-Host "${cwdMarker}$((Get-Location).Path)__"`;
       case 'cmd':
-        return `echo ${preMarker} & ${command} & echo ${marker}_%ERRORLEVEL%__ & echo ${cwdMarker}%CD%__`;
+        // cmd expands %ERRORLEVEL%/%CD% when it parses the LINE, which happens
+        // before execution on a single-line `&` chain: the markers would echo
+        // the PREVIOUS command's values. Writing them as a second line fixes
+        // this: cmd reads line 2 from the input buffer only after line 1
+        // finishes, so expansion reflects the executed command. Both lines go
+        // out in one write; no waiting is needed between them.
+        return `echo ${preMarker} & ${command}\r` +
+          `echo ${marker}_%ERRORLEVEL%__ & echo ${cwdMarker}%CD%__`;
       default: // bash/zsh
         return `echo "${preMarker}"; ${command}; echo "${marker}_$?__"; echo "${cwdMarker}$(pwd)__"`;
     }
@@ -1058,7 +1103,6 @@ export class PtySession {
         // The CWD marker is always the last line of the wrapped command;
         // anything after it is the next interactive prompt — stop there.
         break;
-        continue;
       }
 
       outputLines.push(line);
@@ -1070,10 +1114,11 @@ export class PtySession {
 
   /**
    * Truncate output to maxLines: head(maxLines/2) + "...omitted..." + tail(maxLines/2).
+   * Each line is additionally capped at MAX_LINE_CHARS.
    */
   _truncateOutput(output, maxLines) {
-    const lines = output.split('\n');
-    if (lines.length <= maxLines) return output;
+    const lines = output.split('\n').map((line) => this._truncateLine(line));
+    if (lines.length <= maxLines) return lines.join('\n');
 
     const headCount = Math.floor(maxLines / 2);
     const tailCount = Math.ceil(maxLines / 2);
@@ -1082,6 +1127,46 @@ export class PtySession {
     const omitted = lines.length - headCount - tailCount;
 
     return [...head, `\n... ${omitted} lines omitted ...\n`, ...tail].join('\n');
+  }
+
+  /** Cap a single oversized line, keeping head and tail with a notice. */
+  _truncateLine(line) {
+    if (line.length <= MAX_LINE_CHARS) return line;
+    const head = line.slice(0, LINE_HEAD_CHARS);
+    const tail = line.slice(-LINE_TAIL_CHARS);
+    return `${head}... [line truncated, ${line.length} chars] ...${tail}`;
+  }
+
+  /**
+   * Cap total output bytes, cutting at line boundaries: head + notice + tail.
+   * Call after _truncateOutput so lines are already width-capped.
+   */
+  _truncateBytes(output, maxBytes) {
+    const total = Buffer.byteLength(output, 'utf8');
+    if (total <= maxBytes) return output;
+
+    const lines = output.split('\n');
+    const half = Math.floor(maxBytes / 2);
+    const byteCost = (line) => Buffer.byteLength(line, 'utf8') + 1;
+
+    const head = [];
+    let headBytes = 0;
+    for (const line of lines) {
+      if (headBytes + byteCost(line) > half) break;
+      head.push(line);
+      headBytes += byteCost(line);
+    }
+
+    const tail = [];
+    let tailBytes = 0;
+    for (let i = lines.length - 1; i >= head.length; i--) {
+      if (tailBytes + byteCost(lines[i]) > half) break;
+      tail.unshift(lines[i]);
+      tailBytes += byteCost(lines[i]);
+    }
+
+    const omitted = Math.max(0, total - headBytes - tailBytes);
+    return [...head, `... ${omitted} bytes omitted ...`, ...tail].join('\n');
   }
 
   /**

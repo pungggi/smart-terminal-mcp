@@ -169,6 +169,33 @@ export class BackgroundJob extends EventEmitter {
     });
   }
 
+  /**
+   * Block until the job exits or the timeout hits. MCP servers cannot push
+   * notifications to wake the client, so this is the polling-free way for an
+   * agent to await a background job's final status.
+   * @param {{ timeout?: number, maxLines?: number }} [opts]
+   * @returns {Promise<{ reason: 'exit'|'timeout', output: string, position: number, truncated: boolean, alive: boolean, exitCode: number|null }>}
+   */
+  waitUntilExit({ timeout = 30000, maxLines = DEFAULT_JOB_READ_MAX_LINES } = {}) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (reason) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.off('exit', onExit);
+        resolve({ reason, ...this.read({ maxLines }) });
+      };
+      const timer = setTimeout(() => finish('timeout'), timeout);
+      const onExit = () => finish('exit');
+      if (!this.alive) {
+        finish('exit');
+        return;
+      }
+      this.on('exit', onExit);
+    });
+  }
+
   getInfo() {
     return {
       id: this.id,

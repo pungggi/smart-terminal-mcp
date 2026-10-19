@@ -42,14 +42,38 @@ test('buildSessionEnv skips noninteractive override on Windows', () => {
   }
 });
 
-test('PowerShell wrapper uses safe marker interpolation', () => {
+test('PowerShell wrapper derives exit code from $? with cleared LASTEXITCODE', () => {
   const session = createSession();
   session.shellType = 'powershell';
 
   const command = session._wrapCommand('echo hi', '__DONE__', '__CWD_', '__PRE__');
 
-  assert.match(command, /__DONE___\$\{LASTEXITCODE\}__/);
+  // $LASTEXITCODE must be cleared before the command so a stale value from an
+  // earlier native command cannot leak into this command's exit code.
+  assert.match(command, /\$global:LASTEXITCODE = \$null; echo hi;/);
+  // The reported code is derived from $? (cmdlet success) falling back to
+  // $LASTEXITCODE when a native executable set it.
+  assert.match(command, /\$__mcp_rc = if \(\$\?\)/);
+  assert.match(command, /if \(\$null -ne \$LASTEXITCODE\) \{ \$LASTEXITCODE \} else \{ 0 \}/);
+  assert.match(command, /else \{ if \(\$null -ne \$LASTEXITCODE\) \{ \$LASTEXITCODE \} else \{ 1 \} \}/);
+  // The marker reports the derived code via PS's braced-variable form:
+  // bare "$__mcp_rc__" would parse as a variable named "__mcp_rc__"
+  // (undefined) because underscores are valid name chars.
+  assert.match(command, /__DONE___\$\{__mcp_rc\}__/);
   assert.match(command, /__CWD_\$\(\(Get-Location\)\.Path\)__/);
+});
+
+test('cmd wrapper emits markers on a second line for fresh %ERRORLEVEL%/%CD%', () => {
+  const session = createSession();
+  session.shellType = 'cmd';
+
+  const command = session._wrapCommand('echo hi', '__DONE__', '__CWD_', '__PRE__');
+
+  // cmd expands %VAR% when parsing the line: markers must live on a separate
+  // line, written after the command line, or they echo the PREVIOUS values.
+  const [firstLine, secondLine] = command.split('\r');
+  assert.equal(firstLine, 'echo __PRE__ & echo hi');
+  assert.equal(secondLine, 'echo __DONE___%ERRORLEVEL%__ & echo __CWD_%CD%__');
 });
 
 test('_initShell suppresses PowerShell progress output', async () => {
@@ -119,6 +143,68 @@ test('_truncateOutput keeps the head and tail when output exceeds maxLines', () 
     session._truncateOutput(output, 4),
     ['line 1', 'line 2', '', '... 2 lines omitted ...', '', 'line 5', 'line 6'].join('\n')
   );
+});
+
+test('_truncateOutput caps oversized single lines with a head+tail notice', () => {
+  const session = createSession();
+  const giant = 'x'.repeat(5000);
+  const output = [`before`, giant, 'after'].join('\n');
+
+  const result = session._truncateOutput(output, 10);
+
+  const lines = result.split('\n');
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], 'before');
+  assert.equal(lines[2], 'after');
+  assert.ok(lines[1].length < 1600, `line should be capped, got ${lines[1].length}`);
+  assert.match(lines[1], /\[line truncated, 5000 chars\]/);
+  assert.ok(lines[1].startsWith('x'.repeat(1000)));
+  assert.ok(lines[1].endsWith('x'.repeat(400)));
+});
+
+test('_truncateBytes returns output unchanged under the cap', () => {
+  const session = createSession();
+  const output = 'a'.repeat(100);
+
+  assert.equal(session._truncateBytes(output, 1024), output);
+});
+
+test('_truncateBytes keeps head and tail lines with a byte notice over the cap', () => {
+  const session = createSession();
+  const lines = Array.from({ length: 100 }, (_, i) => `line-${String(i).padStart(3, '0')}`);
+  const output = lines.join('\n'); // ~900 bytes total
+  const cap = 300;
+
+  const result = session._truncateBytes(output, cap);
+  const resultLines = result.split('\n');
+
+  assert.ok(resultLines.length < lines.length);
+  assert.equal(resultLines[0], 'line-000');
+  assert.equal(resultLines.at(-1), 'line-099');
+  const notice = resultLines.find((l) => l.includes('bytes omitted'));
+  assert.ok(notice, 'should contain an omission notice');
+  assert.ok(Buffer.byteLength(result, 'utf8') < cap + 200);
+});
+
+test('exec applies the maxOutputBytes cap to command output', async () => {
+  const session = createSession();
+  session.id = 's1';
+  session.alive = true;
+  session.busy = false;
+  session.shellType = 'bash';
+  session.cwd = '/repo';
+  session.process = { write: () => {} };
+  session._resetBuffer = () => {};
+  session._waitForMarker = async () => ({ buffer: 'raw', reason: 'marker' });
+  const giant = Array.from({ length: 500 }, (_, i) => `data-line-${i}-` + 'x'.repeat(20)).join('\n');
+  session._parseOutput = () => ({ output: giant, exitCode: 0, cwd: null });
+
+  const result = await session.exec({ command: 'big-cmd', timeout: 1000, maxLines: 10000, maxOutputBytes: 4096 });
+
+  assert.ok(Buffer.byteLength(result.output, 'utf8') < 4300, 'byte cap should be applied');
+  assert.match(result.output, /bytes omitted/);
+  assert.ok(result.output.includes('data-line-0'));
+  assert.ok(result.output.includes('data-line-499'));
 });
 
 test('read returns unread buffered output once', async () => {

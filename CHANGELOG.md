@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`terminal_job` wait action**: `action: "wait"` blocks until the background job exits (or a timeout) and returns the final exit code plus an output tail. MCP servers cannot push completion notifications to the client, so this replaces sleep-and-poll loops with a single tool call.
+- **Byte cap on `terminal_exec`**: new `maxOutputBytes` parameter (default 128 KB) caps total PTY output at line boundaries with a head/notice/tail split. `maxLines` alone could not stop a single multi-megabyte line (minified bundle, base64 blob) from flooding the agent context.
+- **Per-line character cap**: output lines longer than 2000 chars are truncated to head + tail with an explicit `[line truncated, N chars]` notice.
+- **`description` audit field**: `terminal_exec` and `terminal_run` accept an optional `description` stating why the command is run; when present it is written to the server's stderr log next to the command, giving session logs an intent trail.
+
+### Fixed
+- **PowerShell stale exit codes**: the wrapper reported raw `$LASTEXITCODE`, which is only set by native executables. A cmdlet run after a failed native command inherited the stale code (success reported as failure), and a failed cmdlet after a successful native command reported success. The wrapper now clears `$LASTEXITCODE` before the command and derives the reported code from `$?`, covering both native and cmdlet commands.
+- **cmd.exe stale markers**: cmd expands `%ERRORLEVEL%`/`%CD%` at parse time of the whole line, so a single-line `&` chain reported the PREVIOUS command's exit code and working directory. The wrapper now writes the marker line after the command line; cmd parses it only after the command finishes, so both values are fresh.
+- **Windows PTY handle leak on kill**: node-pty's winpty path never releases its pipe sockets or conout worker thread when a session is killed (the ConPTY path does). Every `terminal_stop` leaked handles that kept the event loop alive; a long-lived MCP server would accumulate them indefinitely. `PtySession.kill()` now explicitly destroys the sockets and disposes the conout worker, so stopped sessions fully release.
+
+
 ## [1.2.40] - 2026-10-11
 
 ### Added

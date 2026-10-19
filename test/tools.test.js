@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { registerTools } from '../src/tools.js';
+import { DEFAULT_EXEC_MAX_BYTES } from '../src/pty-session.js';
 
 function createFakeServer() {
   const tools = new Map();
@@ -90,6 +91,7 @@ test('tool schemas keep agent-friendly default output sizes', () => {
   registerTools(server, {});
   assert.deepEqual({
     terminalExecMaxLines: server.tools.get('terminal_exec').schema.maxLines.parse(undefined),
+    terminalExecMaxOutputBytes: server.tools.get('terminal_exec').schema.maxOutputBytes.parse(undefined),
     terminalReadMaxLines: server.tools.get('terminal_read').schema.maxLines.parse(undefined),
     terminalHistoryMaxLines: server.tools.get('terminal_get_history').schema.maxLines.parse(undefined),
     terminalHistoryFormat: server.tools.get('terminal_get_history').schema.format.parse(undefined),
@@ -101,6 +103,7 @@ test('tool schemas keep agent-friendly default output sizes', () => {
     terminalListVerbose: server.tools.get('terminal_list').schema.verbose.parse(undefined),
   }, {
     terminalExecMaxLines: 200,
+    terminalExecMaxOutputBytes: DEFAULT_EXEC_MAX_BYTES,
     terminalReadMaxLines: 200,
     terminalHistoryMaxLines: 200,
     terminalHistoryFormat: 'lines',
@@ -582,7 +585,7 @@ test('terminal_exec forwards quietExitMs and minOutputBytes', async () => {
   registerTools(server, manager);
 
   await server.tools.get('terminal_exec').handler(
-    { sessionId: 's1', command: 'npm run dev', timeout: 5000, maxLines: 50, quietExitMs: 2000, minOutputBytes: 10 },
+    { sessionId: 's1', command: 'npm run dev', timeout: 5000, maxLines: 50, maxOutputBytes: 4096, quietExitMs: 2000, minOutputBytes: 10 },
     { sendNotification, _meta: {} },
   );
 
@@ -590,6 +593,7 @@ test('terminal_exec forwards quietExitMs and minOutputBytes', async () => {
     command: 'npm run dev',
     timeout: 5000,
     maxLines: 50,
+    maxOutputBytes: 4096,
     quietExitMs: 2000,
     minOutputBytes: 10,
     sendNotification,
