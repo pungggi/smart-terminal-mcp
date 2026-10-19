@@ -23,6 +23,12 @@ async function withSession(shell, shellArgs, run) {
   try {
     await session.waitForBanner();
     return await run(session);
+  } catch (err) {
+    // Integration failures are environment-dependent; attach what the PTY actually
+    // emitted so CI logs show ground truth instead of a bare assertion diff.
+    const tail = String(session._buffer ?? '').slice(-1500);
+    err.message += `\n[session ${session.id} buffer tail]\n${JSON.stringify(tail)}`;
+    throw err;
   } finally {
     session.kill();
   }
