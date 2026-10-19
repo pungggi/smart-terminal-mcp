@@ -327,6 +327,43 @@ test('_answerTerminalQueries survives a dead PTY without throwing', () => {
   assert.doesNotThrow(() => session._answerTerminalQueries('\u001b[6n'));
 });
 
+test('bracketed paste: mode announcements are tracked and exec wraps its write', async () => {
+  const session = createSession();
+  const writes = [];
+  session.process = { write: (v) => writes.push(v) };
+  assert.equal(session._bracketedPaste, false);
+  assert.equal(session._wrapPaste('cmd'), 'cmd', 'no wrapping before the shell enables the mode');
+
+  session._answerTerminalQueries('\u001b[?2004h');
+  assert.equal(session._bracketedPaste, true);
+  assert.equal(session._wrapPaste('cmd'), '\u001b[200~cmd\u001b[201~');
+
+  session._answerTerminalQueries('\u001b[?2004l');
+  assert.equal(session._bracketedPaste, false, 'mode-off announcement clears the flag');
+});
+
+test('exec writes the command as a bracketed paste when the mode is on', async () => {
+  const session = createSession();
+  session.id = 's1';
+  session.alive = true;
+  session.busy = false;
+  session.shellType = 'bash';
+  session.cwd = '/repo';
+  session._bracketedPaste = true;
+  const writes = [];
+  session.process = { write: (v) => writes.push(v) };
+  session._resetBuffer = () => {};
+  session._waitForMarker = async () => ({ buffer: 'raw', reason: 'marker' });
+  session._parseOutput = () => ({ output: '', exitCode: 0, cwd: null });
+
+  await session.exec({ command: 'echo hi', timeout: 1000 });
+
+  assert.equal(writes.length, 1);
+  assert.match(writes[0], /^\u001b\[200~/);
+  assert.match(writes[0], /echo hi/);
+  assert.match(writes[0], /\u001b\[201~\r$/, 'Enter stays outside the paste so it submits the line');
+});
+
 test('exec timeout over a continuation prompt reports the specific hint', async () => {
   const session = createSession();
   session.id = 's1';

@@ -208,6 +208,10 @@ export class PtySession {
     this._pendingEchoAt = 0;
     /** Tail of recent output used to spot terminal queries split across chunks. */
     this._queryCarry = '';
+    /** Shell has bracketed paste enabled (it announced ESC[?2004h): programmatic
+     *  writes can be wrapped in ESC[200~..ESC[201~ so the line editor inserts
+     *  them verbatim instead of re-rendering per chunk. */
+    this._bracketedPaste = false;
 
     const env = buildSessionEnv(customEnv);
 
@@ -320,7 +324,7 @@ export class PtySession {
     const wrappedCommand = this._wrapCommand(command, marker, cwdMarker, preMarker);
 
     try {
-      this.process.write(wrappedCommand + '\r');
+      this.process.write(this._wrapPaste(wrappedCommand) + '\r');
       // The echo of the wrapped command can still be streaming when a
       // concurrent/later waitForPattern anchors at the stream end (slow
       // winpty/cmd input echo); remember it so it can be masked.
@@ -983,6 +987,8 @@ export class PtySession {
   _answerTerminalQueries(data) {
     let rest = this._queryCarry + data;
     try {
+      if (rest.includes('\x1b[?2004h')) this._bracketedPaste = true;
+      if (rest.includes('\x1b[?2004l')) this._bracketedPaste = false;
       let at;
       while ((at = rest.indexOf('\x1b[6n')) !== -1) {
         this.process.write('\x1b[1;1R');
@@ -997,6 +1003,22 @@ export class PtySession {
       // that transition — never throw from inside the data listener.
     }
     this._queryCarry = rest.slice(-8);
+  }
+
+  /**
+   * Wrap a programmatic write in bracketed-paste markers when the shell has
+   * the mode enabled. Long pasted lines otherwise make PSReadLine re-render
+   * after every chunk and query the cursor between renders — and with a bare
+   * PTY host answering every DSR as "1;1", that loop never terminates and the
+   * command is never submitted (observed on Linux pwsh; the short init line
+   * worked, the 300-char wrapped command hung). Wrapped as a paste, the line
+   * editor inserts the text verbatim and the following '\r' submits it.
+   *
+   * @param {string} text
+   * @returns {string}
+   */
+  _wrapPaste(text) {
+    return this._bracketedPaste ? `\x1b[200~${text}\x1b[201~` : text;
   }
 
   _wrapCommand(command, marker, cwdMarker, preMarker) {
