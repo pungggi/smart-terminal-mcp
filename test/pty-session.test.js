@@ -342,25 +342,33 @@ test('bracketed paste: mode announcements are tracked and exec wraps its write',
   assert.equal(session._bracketedPaste, false, 'mode-off announcement clears the flag');
 });
 
-test('_waitForSequence resolves on match and soft-times out to empty', async () => {
+test('_waitForPromptShellReady waits for a quiet, prompt-shaped last line', async () => {
   const session = createWaitSession('');
 
-  // Pre-existing match in the tail resolves immediately (nothing new).
-  session._buffer = 'noise\u001b[?1h';
-  assert.equal(await session._waitForSequence(/\x1b\[\?1h/, 50), '');
+  // Already satisfied: prompt-shaped last line, no output for a while.
+  session._buffer = 'Windows PowerShell\r\nPS C:\\repo> ';
+  assert.equal(await session._waitForPromptShellReady(200), '');
 
-  // Arrival after subscription resolves with the newly collected text.
+  // Chatty shell: a prompt line exists but output keeps flowing — never
+  // ready, soft timeout returns ''.
+  session._buffer = 'PS /tmp> ';
+  const chatty = session._waitForPromptShellReady(350);
+  const pump = setInterval(() => {
+    session._buffer += 'x';
+    session._dataListeners.at(-1)('x');
+  }, 80);
+  assert.equal(await chatty, '', 'continuous output must not count as ready');
+  clearInterval(pump);
+
+  // Output stops on a prompt line: ready once the quiet window elapses,
+  // resolving with the text collected since the call.
   session._buffer = '';
-  const waiting = session._waitForSequence(/\x1b\[6n/, 500);
+  const waiting = session._waitForPromptShellReady(2000);
   setTimeout(() => {
-    session._buffer += 'chunk1\u001b[6n';
-    session._dataListeners.at(-1)('chunk1\u001b[6n');
-  }, 20);
-  assert.equal(await waiting, 'chunk1\u001b[6n');
-
-  // Timeout resolves with '' so callers fall through to legacy behavior.
-  session._buffer = '';
-  assert.equal(await session._waitForSequence(/\x1b\[6n/, 30), '');
+    session._buffer += 'PS /tmp> ';
+    session._dataListeners.at(-1)('PS /tmp> ');
+  }, 50);
+  assert.equal(await waiting, 'PS /tmp> ');
 });
 
 test('exec writes the command as a bracketed paste when the mode is on', async () => {

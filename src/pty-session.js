@@ -266,15 +266,16 @@ export class PtySession {
     let banner = await this._readUntilIdle(BANNER_WAIT_MS, BANNER_IDLE_MS);
     if (this.shellType === 'powershell') {
       // PSReadLine can start SECONDS after the process on slow machines (CI
-      // runners). Before it does, the tty is in canonical mode: kernel echo
-      // mangles the stream, written CRs get NL-translated into dead keys, and
-      // everything written in that window merges into ONE edit line when the
-      // line editor finally reads the queue (init + first exec command = one
-      // parse error, every marker times out). PSReadLine announces its read
-      // loop with ESC[?1h (DECCKM) or an ESC[6n cursor query — wait for that
-      // signature before touching input. Soft timeout: a PS hosting without
-      // PSReadLine proceeds as before.
-      banner += await this._waitForSequence(/\x1b\[\?1h|\x1b\[6n/, PSREADLINE_WAIT_MS);
+      // runners). Before its read loop is live, the tty stays in canonical
+      // mode: kernel echo mangles the stream, written CRs become dead keys,
+      // and everything written in that window merges into ONE edit line when
+      // the line editor finally reads the queue (init + first exec command =
+      // one parse error, every marker times out). Its console-init signature
+      // (ESC[?1h) arrives too early to be safe either — the first PROMPT
+      // render is the real "reading input now" signal. Wait for a quiet,
+      // prompt-shaped last line before touching input; soft timeout keeps
+      // exotic prompts working exactly as before.
+      banner += await this._waitForPromptShellReady(PSREADLINE_WAIT_MS);
     }
     // Run shell-specific init commands after banner
     await this._initShell();
@@ -1037,38 +1038,49 @@ export class PtySession {
   }
 
   /**
-   * Collect output until it matches a control-sequence regex, or time out.
-   * Scans only the buffer tail: the sequences of interest are short and
-   * always arrive last. Resolves with the newly collected text ('' on
-   * timeout) so callers can keep composing banner output.
+   * Wait until PowerShell looks interactive: the last non-empty output line
+   * is prompt-shaped (ends in a prompt terminator like `> `, `$ `, `# `,
+   * `% ` or `❯ ` — default PS, posh-git, starship all qualify) AND output has
+   * been quiet for a beat, so startup rendering is finished and the line
+   * editor is waiting for input. Resolves with newly collected text ('' when
+   * already satisfied or on soft timeout).
    *
-   * @param {RegExp} re
    * @param {number} timeoutMs
    * @returns {Promise<string>}
    */
-  _waitForSequence(re, timeoutMs) {
+  _waitForPromptShellReady(timeoutMs) {
+    const PROMPTISH = /[>#$%❯] ?$/;
     return new Promise((resolve) => {
       const startedAt = this._buffer.length;
+      let lastChunkAt = Date.now();
       let done = false;
       let timer;
-      const finish = (matched) => {
+      const ready = () => {
+        const text = stripAnsi(this._buffer).slice(-512);
+        const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        const last = lines[lines.length - 1] ?? '';
+        return PROMPTISH.test(last) && Date.now() - lastChunkAt >= BANNER_IDLE_MS;
+      };
+      const finish = (ok) => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        clearInterval(timer);
         const idx = this._dataListeners.indexOf(onData);
         if (idx !== -1) this._dataListeners.splice(idx, 1);
-        resolve(matched ? this._buffer.slice(startedAt) : '');
+        resolve(ok ? this._buffer.slice(startedAt) : '');
       };
-      const test = () => re.test(this._buffer.slice(-256));
       const onData = () => {
-        if (test()) finish(true);
+        lastChunkAt = Date.now();
       };
-      if (test()) {
+      timer = setInterval(() => {
+        if (ready()) finish(true);
+      }, 100);
+      this._dataListeners.push(onData);
+      if (ready()) {
         finish(true);
         return;
       }
-      timer = setTimeout(() => finish(false), timeoutMs);
-      this._dataListeners.push(onData);
+      setTimeout(() => finish(false), timeoutMs);
     });
   }
 
