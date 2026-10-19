@@ -207,6 +207,110 @@ test('exec applies the maxOutputBytes cap to command output', async () => {
   assert.ok(result.output.includes('data-line-499'));
 });
 
+test('_validateCommandForPty rejects PowerShell here-strings, terminated or not', () => {
+  const session = createSession();
+  session.shellType = 'powershell';
+
+  const terminated = "gh pr create --title t --body @'\nline with 'apostrophes'\n'@";
+  assert.ok(session._validateCommandForPty(terminated), 'terminated here-string must be rejected');
+  assert.match(session._validateCommandForPty(terminated), /terminal_write_file.*--body-file/s);
+
+  // Lone opener, body meant to follow via terminal_write: still doomed (the
+  // wrapper's markers get swallowed by the here-string).
+  assert.ok(session._validateCommandForPty("gh pr create --body @'"));
+  // @" variant
+  assert.ok(session._validateCommandForPty('$x = @"\nbody\n"@'));
+
+  // Safe commands: opener must sit at end-of-line to be a real here-string.
+  assert.equal(session._validateCommandForPty("Write-Host 'hi' ; echo a@b.com"), null);
+  assert.equal(session._validateCommandForPty('git status'), null);
+  assert.equal(session._validateCommandForPty("if (1) {\n  Write-Host 'block'\n}"), null);
+});
+
+test('_validateCommandForPty rejects heredocs on POSIX shells, keeps here-strings and redirects', () => {
+  const session = createSession();
+  session.shellType = 'bash';
+
+  assert.ok(session._validateCommandForPty("cat <<'EOF'\nbody\nEOF"), 'quoted heredoc must be rejected');
+  assert.ok(session._validateCommandForPty('cat <<-EOF\nbody\n	EOF'), 'dash variant must be rejected');
+  assert.ok(session._validateCommandForPty('cat <<EOF'), 'heredoc without body still hangs: rejected');
+  assert.match(session._validateCommandForPty('cat <<EOF'), /never terminate.*--body-file/s);
+
+  // Safe: here-string (<<<), plain redirects, output duplication. A quoted
+  // 'a << b' can false-positive like a spaced '<< EOF' heredoc — accepted:
+  // syntax alone cannot tell them apart, and the error's workaround (use a
+  // file) is benign.
+  assert.equal(session._validateCommandForPty('cat <<<"$var"'), null);
+  assert.equal(session._validateCommandForPty('cmd < input.txt'), null);
+  assert.equal(session._validateCommandForPty('npm test 2>&1 | tee log'), null);
+});
+
+test('_validateCommandForPty leaves cmd.exe and unknown shells without heredoc syntax alone', () => {
+  const session = createSession();
+  session.shellType = 'cmd';
+  assert.equal(session._validateCommandForPty("echo @' weird\ndir"), null);
+  assert.equal(session._validateCommandForPty('dir & echo done'), null);
+});
+
+test('exec fails fast on here-string/heredoc commands without writing to the PTY', async () => {
+  const session = createSession();
+  session.id = 's1';
+  session.alive = true;
+  session.busy = false;
+  session.shellType = 'powershell';
+  const writes = [];
+  session.process = { write: (v) => writes.push(v) };
+  session._resetBuffer = () => {};
+
+  await assert.rejects(
+    session.exec({ command: "gh pr create --body @'\nbody\n'@", timeout: 100 }),
+    /here-strings.*terminal_write_file/s,
+  );
+  assert.deepEqual(writes, [], 'nothing must be written to the PTY');
+  assert.equal(session.busy, false, 'session must not stay busy after the guard throws');
+});
+
+test('_continuationHint names the stuck prompt on timeout', () => {
+  const session = createSession();
+
+  const ps = session._continuationHint('PS C:\\repo> gh pr create --body @\'\r\n>> ');
+  assert.match(ps, /continuation prompt \(>>\)/);
+  assert.match(ps, /terminal_write/);
+
+  const posix = session._continuationHint('$ cat <<EOF\r\nbody\r\n> ');
+  assert.match(posix, /continuation prompt \(>\)/);
+  assert.match(posix, /heredoc/);
+
+  const cmdMore = session._continuationHint('C:\\repo> echo "open\r\nMore? ');
+  assert.match(cmdMore, /More\?/);
+
+  // Normal trailing prompt/output: no continuation hint.
+  assert.equal(session._continuationHint('done\r\nPS C:\\repo> '), null);
+  assert.equal(session._continuationHint(''), null);
+  assert.equal(session._continuationHint('done\r\nuser@host:~$ '), null);
+  // ANSI-colored prompt must not defeat detection.
+  assert.match(session._continuationHint('\u001b[32m>>\u001b[0m '), />>/);
+});
+
+test('exec timeout over a continuation prompt reports the specific hint', async () => {
+  const session = createSession();
+  session.id = 's1';
+  session.alive = true;
+  session.busy = false;
+  session.shellType = 'powershell';
+  session.cwd = 'C:\\repo';
+  session.process = { write: () => {} };
+  session._resetBuffer = () => {};
+  session._waitForMarker = async () => ({ buffer: "PS> gh pr create --body @'\r\n>> ", reason: 'timeout' });
+  session._parseOutput = () => ({ output: '', exitCode: null, cwd: null });
+
+  const result = await session.exec({ command: 'gh pr create --title t', timeout: 50 });
+
+  assert.equal(result.timedOut, true);
+  assert.match(result.hint, /continuation prompt/);
+  assert.ok(!result.hint.includes('still running in the background'), 'generic hint must be replaced');
+});
+
 test('read returns unread buffered output once', async () => {
   const session = createSession();
   session.alive = true;

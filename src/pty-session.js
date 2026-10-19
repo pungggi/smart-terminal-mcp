@@ -28,6 +28,18 @@ const DEFAULT_WAIT_TAIL_LINES = 50;
 /** Wait patterns are scanned in windows, so `^`/`$` use per-line semantics. */
 export const WAIT_PATTERN_FLAGS = 'm';
 const PROGRESS_INTERVAL_MS = 1000;
+/** PowerShell here-string opener (`@'` / `@"`) as the last token on a line —
+ *  the only legal placement, so any hit is a real here-string. */
+const PS_HERE_STRING_OPENER = /@(?:'|\")[^\S\r\n]*$/m;
+/** POSIX heredoc redirect (`<<EOF`, `<<- 'EOF'`, …). Lookarounds exclude
+ *  here-strings (`<<<word`) and plain `<` redirects. */
+const HEREDOC_REDIRECT = /(?<!<)<<(?!<)-?\s*[\'\"]?[A-Za-z_][\w-]*/;
+/** Continuation prompts the shell shows while waiting for more input. */
+const CONTINUATION_PROMPTS = {
+  ps: /^>>/,
+  posix: /^>$/,
+  cmd: /^More\?/,
+};
 /** Written input whose echo has not arrived yet is dropped after this long,
  *  so a never-echoed write (password prompt, echo off) cannot arm the
  *  echo mask against unrelated output indefinitely. */
@@ -279,6 +291,13 @@ export class PtySession {
     if (!this.alive) {
       throw new Error(`Session ${this.id} is no longer alive.`);
     }
+    // Multi-line here-strings/heredocs cannot survive this wrapper (see
+    // _validateCommandForPty): fail fast with the workaround instead of
+    // hanging the session until the timeout.
+    const inputError = this._validateCommandForPty(command);
+    if (inputError) {
+      throw new Error(inputError);
+    }
 
     this.busy = true;
     this._resetBuffer();
@@ -303,6 +322,8 @@ export class PtySession {
       const { output, exitCode, cwd } = this._parseOutput(raw, marker, cwdMarker, preMarker);
       if (cwd) this.cwd = cwd;
 
+      const continuationHint = (timedOut || quietExited) ? this._continuationHint(raw) : null;
+
       if (markerFound) {
         this.busy = false;
         this._pendingMarker = null;
@@ -316,7 +337,10 @@ export class PtySession {
         cwd: this.cwd,
         timedOut,
         ...(quietExited && { quietExited: true }),
-        ...((timedOut || quietExited) && { hint: 'Command is still running in the background. Session remains busy. Use terminal_read to get new output, or terminal_send_key("ctrl+c") to abort. Prefer terminal_run_background for long-running commands.' }),
+        ...((timedOut || quietExited) && {
+          hint: continuationHint
+            ?? 'Command is still running in the background. Session remains busy. Use terminal_read to get new output, or terminal_send_key("ctrl+c") to abort. Prefer terminal_run_background for long-running commands.',
+        }),
       };
     } catch (err) {
       this.busy = false;
@@ -868,6 +892,65 @@ export class PtySession {
     if (overflow > 0) {
       this._history.splice(0, overflow);
     }
+  }
+
+  /**
+   * Reject multi-line constructs that cannot survive this wrapper.
+   *
+   * The PTY feeds input to the shell line by line, and PSReadLine can eat
+   * characters while it renders mid-paste (an eaten `@'` opener turns every
+   * apostrophe in the body into a string delimiter: `Unexpected token`).
+   * Heredocs are worse: the completion markers appended after the command
+   * land on the closing-delimiter line, so the delimiter never matches and
+   * the shell keeps reading the body forever. Failing fast with the
+   * workaround beats a timeout plus a busy session every time.
+   *
+   * @param {string} command
+   * @returns {string|null} error message, or null when the command is safe
+   */
+  _validateCommandForPty(command) {
+    if (typeof command !== 'string') return null;
+    // The opener regex only matches at end-of-line (or end-of-input): legal
+    // here-string placement. Even a lone opener with the body meant to follow
+    // via terminal_write is doomed — the wrapper's markers get swallowed by
+    // the here-string, so it still hangs. Same for any heredoc redirect: its
+    // body always starts on the next line, which the wrapper's markers then
+    // occupy.
+    if (this.shellType === 'powershell' && PS_HERE_STRING_OPENER.test(command)) {
+      return 'Multi-line PowerShell here-strings (@\'...\'@ / @"..."@) are unreliable through the PTY, which feeds the shell line by line (openers get eaten, quotes break parsing). Write the payload to a file instead (terminal_write_file) and reference it: e.g. gh pr create --body-file <path>, or --body "$(Get-Content <path> -Raw)".';
+    }
+    if (this.shellType !== 'powershell' && this.shellType !== 'cmd' && HEREDOC_REDIRECT.test(command)) {
+      return 'Multi-line heredocs (<<EOF) never terminate through this tool: the completion markers appended after the command land on the closing-delimiter line, so the shell keeps reading the heredoc body forever. Write the payload to a file instead (terminal_write_file) and reference it: e.g. gh pr create --body-file <path>, or command < <path>.';
+    }
+    return null;
+  }
+
+  /**
+   * When a command does not complete, check whether the shell is showing a
+   * continuation prompt — an unterminated statement (here-string, quote, open
+   * block) — and return a hint that says exactly that instead of the generic
+   * "still running" message.
+   *
+   * @param {string} buffer raw PTY output
+   * @returns {string|null}
+   */
+  _continuationHint(buffer) {
+    const lines = stripAnsi(String(buffer ?? '')).split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      if (CONTINUATION_PROMPTS.ps.test(line)) {
+        return 'The shell is stuck at a continuation prompt (>>): an unterminated PowerShell statement (here-string, quote, or open block). Send the closing line with terminal_write, or abort with terminal_send_key("ctrl+c").';
+      }
+      if (CONTINUATION_PROMPTS.posix.test(line)) {
+        return 'The shell is stuck at a continuation prompt (>): an unterminated quote or heredoc body. Send the closing delimiter/quote with terminal_write, or abort with terminal_send_key("ctrl+c").';
+      }
+      if (CONTINUATION_PROMPTS.cmd.test(line)) {
+        return 'The shell is waiting at a "More?" prompt: an unterminated cmd.exe statement (unclosed quote or parenthesized block). Send the missing input with terminal_write, or abort with terminal_send_key("ctrl+c").';
+      }
+      return null;
+    }
+    return null;
   }
 
   _wrapCommand(command, marker, cwdMarker, preMarker) {
