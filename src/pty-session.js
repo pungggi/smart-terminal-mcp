@@ -37,12 +37,6 @@ const PS_HERE_STRING_OPENER = /@(?:'|\")[^\S\r\n]*$/m;
 /** POSIX heredoc redirect (`<<EOF`, `<<- 'EOF'`, …). Lookarounds exclude
  *  here-strings (`<<<word`) and plain `<` redirects. */
 const HEREDOC_REDIRECT = /(?<!<)<<(?!<)-?\s*[\'\"]?[A-Za-z_][\w-]*/;
-/** Continuation prompts the shell shows while waiting for more input. */
-const CONTINUATION_PROMPTS = {
-  ps: /^>>/,
-  posix: /^>$/,
-  cmd: /^More\?/,
-};
 /** Written input whose echo has not arrived yet is dropped after this long,
  *  so a never-echoed write (password prompt, echo off) cannot arm the
  *  echo mask against unrelated output indefinitely. */
@@ -963,6 +957,11 @@ export class PtySession {
    * block) — and return a hint that says exactly that instead of the generic
    * "still running" message.
    *
+   * Prompt renders arrive with absolute cursor addressing (ESC[r;cH) and no
+   * preceding newline, so the prompt can sit at the END of a split line full
+   * of render residue — match by suffix, per shell type. PowerShell's
+   * primary prompt also ends in `>`, so PS requires the doubled `>>`.
+   *
    * @param {string} buffer raw PTY output
    * @returns {string|null}
    */
@@ -971,14 +970,14 @@ export class PtySession {
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i].trim();
       if (!line) continue;
-      if (CONTINUATION_PROMPTS.ps.test(line)) {
-        return 'The shell is stuck at a continuation prompt (>>): an unterminated PowerShell statement (here-string, quote, or open block). Send the closing line with terminal_write, or abort with terminal_send_key("ctrl+c").';
-      }
-      if (CONTINUATION_PROMPTS.posix.test(line)) {
-        return 'The shell is stuck at a continuation prompt (>): an unterminated quote or heredoc body. Send the closing delimiter/quote with terminal_write, or abort with terminal_send_key("ctrl+c").';
-      }
-      if (CONTINUATION_PROMPTS.cmd.test(line)) {
-        return 'The shell is waiting at a "More?" prompt: an unterminated cmd.exe statement (unclosed quote or parenthesized block). Send the missing input with terminal_write, or abort with terminal_send_key("ctrl+c").';
+      const isContinuation = this.shellType === 'powershell'
+        ? />> ?$/.test(line)
+        : this.shellType === 'cmd'
+          ? /More\? ?$/.test(line)
+          : /> ?$/.test(line);
+      if (isContinuation) {
+        const closer = this.shellType === 'cmd' ? 'the closing quote or parenthesis' : 'the closing line';
+        return `The shell is stuck at a continuation prompt (${this.shellType === 'cmd' ? 'More?' : line.slice(-2).trim()}): an unterminated ${this.shellType === 'powershell' ? 'PowerShell statement (here-string, quote, or open block)' : this.shellType === 'cmd' ? 'cmd.exe statement (unclosed quote or block)' : 'quote or heredoc body'}. Send ${closer} with terminal_write, or abort with terminal_send_key("ctrl+c").`;
       }
       return null;
     }

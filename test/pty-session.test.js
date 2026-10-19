@@ -286,12 +286,18 @@ test('_continuationHint names the stuck prompt on timeout', () => {
   const cmdMore = session._continuationHint('C:\\repo> echo "open\r\nMore? ');
   assert.match(cmdMore, /More\?/);
 
-  // Normal trailing prompt/output: no continuation hint.
+  // Normal trailing prompt/output: no continuation hint. A PowerShell PRIMARY
+  // prompt ends in a single `>` — must NOT be treated as continuation.
   assert.equal(session._continuationHint('done\r\nPS C:\\repo> '), null);
   assert.equal(session._continuationHint(''), null);
   assert.equal(session._continuationHint('done\r\nuser@host:~$ '), null);
   // ANSI-colored prompt must not defeat detection.
   assert.match(session._continuationHint('\u001b[32m>>\u001b[0m '), />>/);
+  // CI shape: PSReadLine renders the continuation prompt with absolute cursor
+  // addressing and no newline — the `>>` lands at the END of a line full of
+  // render residue. Must still be detected.
+  const ciShape = 'Write-Host "__MCP_CWD_$((Get-Location).Path)__"\u001b[4;25H\u001b[?12l\u001b[5;1H\u001b[0m\u001b[37m>> \u001b[39;49m\u001b[5;4H\u001b[?25h';
+  assert.match(session._continuationHint(ciShape), /continuation prompt \(>>\)/);
 });
 
 test('_answerTerminalQueries replies to DSR and DA requests like a terminal', () => {
