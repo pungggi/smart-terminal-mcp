@@ -89,7 +89,9 @@ test('_initShell suppresses PowerShell progress output', async () => {
 
   await session._initShell();
 
-  assert.deepEqual(writes, ["$ProgressPreference = 'SilentlyContinue'\r"]);
+  // The empty Enter first submits any half-typed line left over from a slow
+  // PSReadLine startup, so the init command always lands on its own line.
+  assert.deepEqual(writes, ["\r", "$ProgressPreference = 'SilentlyContinue'\r"]);
   assert.equal(resetCalls, 1);
 });
 
