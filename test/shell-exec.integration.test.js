@@ -20,14 +20,25 @@ async function withSession(shell, shellArgs, run) {
     rows: 30,
     cwd: tmpdir(),
   });
+  // Timestamped raw-chunk trace: when integration tests fail on CI, the
+  // ordering of writes/echo/DSR vs shell readiness is the thing we need.
+  const t0 = Date.now();
+  const trace = [];
+  session._dataListeners.push((chunk) => {
+    if (trace.length < 200) trace.push(`+${Date.now() - t0}ms ${JSON.stringify(chunk.slice(0, 120))}`);
+  });
   try {
     await session.waitForBanner();
-    return await run(session);
+    trace.push(`+${Date.now() - t0}ms BANNER DONE`);
+    const result = await run(session);
+    trace.push(`+${Date.now() - t0}ms RUN DONE`);
+    return result;
   } catch (err) {
     // Integration failures are environment-dependent; attach what the PTY actually
     // emitted so CI logs show ground truth instead of a bare assertion diff.
     const tail = String(session._buffer ?? '').slice(-1500);
     err.message += `\n[session ${session.id} buffer tail]\n${JSON.stringify(tail)}`;
+    err.message += `\n[session ${session.id} chunk trace]\n${trace.join('\n')}`;
     throw err;
   } finally {
     session.kill();
