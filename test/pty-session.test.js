@@ -345,9 +345,9 @@ test('bracketed paste: mode announcements are tracked and exec wraps its write',
 test('_waitForSequence resolves on match and soft-times out to empty', async () => {
   const session = createWaitSession('');
 
-  // Pre-existing match in the tail resolves immediately.
+  // Pre-existing match in the tail resolves immediately (nothing new).
   session._buffer = 'noise\u001b[?1h';
-  assert.equal(await session._waitForSequence(/\x1b\[\?1h/, 50), '\u001b[?1h');
+  assert.equal(await session._waitForSequence(/\x1b\[\?1h/, 50), '');
 
   // Arrival after subscription resolves with the newly collected text.
   session._buffer = '';
