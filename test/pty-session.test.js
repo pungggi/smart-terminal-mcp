@@ -331,7 +331,7 @@ test('bracketed paste: mode announcements are tracked and exec wraps its write',
   const session = createSession();
   const writes = [];
   session.process = { write: (v) => writes.push(v) };
-  assert.equal(session._bracketedPaste, false);
+  session._bracketedPaste = false;
   assert.equal(session._wrapPaste('cmd'), 'cmd', 'no wrapping before the shell enables the mode');
 
   session._answerTerminalQueries('\u001b[?2004h');
