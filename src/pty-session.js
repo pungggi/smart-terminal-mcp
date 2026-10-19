@@ -206,6 +206,8 @@ export class PtySession {
     this._pendingEcho = '';
     /** When _pendingEcho was last extended/renewed. */
     this._pendingEchoAt = 0;
+    /** Tail of recent output used to spot terminal queries split across chunks. */
+    this._queryCarry = '';
 
     const env = buildSessionEnv(customEnv);
 
@@ -220,6 +222,7 @@ export class PtySession {
 
     this.process.onData((data) => {
       this.lastActivity = Date.now();
+      this._answerTerminalQueries(data);
       this._consumePendingEchoData(data);
       this._buffer += data;
       this._totalBytesEmitted += data.length;
@@ -951,6 +954,40 @@ export class PtySession {
       return null;
     }
     return null;
+  }
+
+  /**
+   * Answer terminal control queries embedded in the output stream.
+   *
+   * We are the terminal. Unix PSReadLine (and zle) send a DSR cursor-position
+   * request (ESC[6n) right after initializing and BLOCK until the terminal
+   * replies ESC[<row>;<col>R; some clients also send a Device Attributes
+   * query (ESC[c). A real terminal answers both — a bare PTY host answers
+   * neither, so the very first command in a pwsh session on Linux/macOS
+   * hangs forever (observed: GitHub Actions runners; the echoed command is
+   * followed by ESC[?1h ESC= ESC[6n and nothing else ever arrives).
+   * Replies: DSR -> cursor at 1;1 (position math may render slightly off in
+   * the interactive editor; markers and output are unaffected), DA -> VT100.
+   *
+   * @param {string} data new output chunk
+   */
+  _answerTerminalQueries(data) {
+    let rest = this._queryCarry + data;
+    try {
+      let at;
+      while ((at = rest.indexOf('\x1b[6n')) !== -1) {
+        this.process.write('\x1b[1;1R');
+        rest = rest.slice(at + 4);
+      }
+      if (rest.includes('\x1b[c') || rest.includes('\x1b[0c')) {
+        this.process.write('\x1b[?1;2c');
+        rest = rest.replace(/\x1b\[0?c/g, '');
+      }
+    } catch {
+      // The PTY can die between onData and write; the onExit handler owns
+      // that transition — never throw from inside the data listener.
+    }
+    this._queryCarry = rest.slice(-8);
   }
 
   _wrapCommand(command, marker, cwdMarker, preMarker) {

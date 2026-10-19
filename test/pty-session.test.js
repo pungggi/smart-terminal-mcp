@@ -292,6 +292,39 @@ test('_continuationHint names the stuck prompt on timeout', () => {
   assert.match(session._continuationHint('\u001b[32m>>\u001b[0m '), />>/);
 });
 
+test('_answerTerminalQueries replies to DSR and DA requests like a terminal', () => {
+  const session = createSession();
+  const writes = [];
+  session.process = { write: (v) => writes.push(v) };
+
+  // DSR cursor-position request: Unix PSReadLine blocks on this after init.
+  session._answerTerminalQueries('some output\u001b[?1h\u001b=\u001b[6n');
+  assert.deepEqual(writes, ['\u001b[1;1R']);
+
+  // Device Attributes query.
+  writes.length = 0;
+  session._answerTerminalQueries('\u001b[c');
+  assert.deepEqual(writes, ['\u001b[?1;2c']);
+
+  // Split across chunks: the query may straddle onData boundaries.
+  writes.length = 0;
+  session._answerTerminalQueries('tail ends with \u001b[6');
+  assert.deepEqual(writes, []);
+  session._answerTerminalQueries('n more output');
+  assert.deepEqual(writes, ['\u001b[1;1R']);
+
+  // Ordinary output never triggers a reply.
+  writes.length = 0;
+  session._answerTerminalQueries('plain text 123 and [6n but no ESC');
+  assert.deepEqual(writes, []);
+});
+
+test('_answerTerminalQueries survives a dead PTY without throwing', () => {
+  const session = createSession();
+  session.process = { write: () => { throw new Error('EPIPE'); } };
+  assert.doesNotThrow(() => session._answerTerminalQueries('\u001b[6n'));
+});
+
 test('exec timeout over a continuation prompt reports the specific hint', async () => {
   const session = createSession();
   session.id = 's1';
