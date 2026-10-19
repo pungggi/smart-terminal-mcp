@@ -6,12 +6,12 @@
     "url": "https://github.com/pungggi/smart-terminal-mcp",
     "source": "github"
   },
-  "version": "1.2.40",
+  "version": "1.2.41",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "smart-terminal-mcp",
-      "version": "1.2.40",
+      "version": "1.2.41",
       "transport": {
         "type": "stdio"
       }

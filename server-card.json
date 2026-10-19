@@ -1,7 +1,7 @@
 {
   "serverInfo": {
     "name": "smart-terminal-mcp",
-    "version": "1.2.40"
+    "version": "1.2.41"
   },
   "tools": [
     {
@@ -54,6 +54,10 @@
           "command": {
             "type": "string"
           },
+          "description": {
+            "type": "string",
+            "description": "Why: recorded in audit log"
+          },
           "timeout": {
             "type": "integer",
             "minimum": 1000,
@@ -65,6 +69,13 @@
             "minimum": 10,
             "maximum": 10000,
             "default": 200
+          },
+          "maxOutputBytes": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 1048576,
+            "default": 131072,
+            "description": "Total output byte cap"
           },
           "quietExitMs": {
             "type": "integer",
@@ -105,6 +116,10 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "Why: recorded in audit log"
           },
           "timeout": {
             "type": "integer",
@@ -318,7 +333,7 @@
     },
     {
       "name": "terminal_job",
-      "description": "Read output from, or stop, a background job.",
+      "description": "Read output from, wait for, or stop a background job.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -329,9 +344,17 @@
             "type": "string",
             "enum": [
               "output",
+              "wait",
               "stop"
             ],
             "default": "output"
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000,
+            "default": 30000,
+            "description": "wait timeout before giving up"
           },
           "since": {
             "type": "integer",
