@@ -342,6 +342,27 @@ test('bracketed paste: mode announcements are tracked and exec wraps its write',
   assert.equal(session._bracketedPaste, false, 'mode-off announcement clears the flag');
 });
 
+test('_waitForSequence resolves on match and soft-times out to empty', async () => {
+  const session = createWaitSession('');
+
+  // Pre-existing match in the tail resolves immediately.
+  session._buffer = 'noise\u001b[?1h';
+  assert.equal(await session._waitForSequence(/\x1b\[\?1h/, 50), '\u001b[?1h');
+
+  // Arrival after subscription resolves with the newly collected text.
+  session._buffer = '';
+  const waiting = session._waitForSequence(/\x1b\[6n/, 500);
+  setTimeout(() => {
+    session._buffer += 'chunk1\u001b[6n';
+    session._dataListeners.at(-1)('chunk1\u001b[6n');
+  }, 20);
+  assert.equal(await waiting, 'chunk1\u001b[6n');
+
+  // Timeout resolves with '' so callers fall through to legacy behavior.
+  session._buffer = '';
+  assert.equal(await session._waitForSequence(/\x1b\[6n/, 30), '');
+});
+
 test('exec writes the command as a bracketed paste when the mode is on', async () => {
   const session = createSession();
   session.id = 's1';

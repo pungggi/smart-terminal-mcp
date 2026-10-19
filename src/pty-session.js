@@ -12,6 +12,9 @@ const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB
 const HISTORY_MAX_LINES = 10_000;
 const BANNER_WAIT_MS = 2000;
 const BANNER_IDLE_MS = 500;
+/** How long waitForBanner waits for PSReadLine's read-loop signature before
+ *  giving up and proceeding (soft timeout — old PS without PSReadLine). */
+const PSREADLINE_WAIT_MS = 10_000;
 export const DEFAULT_EXEC_MAX_LINES = 200;
 export const DEFAULT_EXEC_MAX_BYTES = 128 * 1024;
 /** Cap applied to any single output line: maxLines says nothing about line width,
@@ -260,7 +263,19 @@ export class PtySession {
    * @returns {Promise<string>}
    */
   async waitForBanner() {
-    const banner = await this._readUntilIdle(BANNER_WAIT_MS, BANNER_IDLE_MS);
+    let banner = await this._readUntilIdle(BANNER_WAIT_MS, BANNER_IDLE_MS);
+    if (this.shellType === 'powershell') {
+      // PSReadLine can start SECONDS after the process on slow machines (CI
+      // runners). Before it does, the tty is in canonical mode: kernel echo
+      // mangles the stream, written CRs get NL-translated into dead keys, and
+      // everything written in that window merges into ONE edit line when the
+      // line editor finally reads the queue (init + first exec command = one
+      // parse error, every marker times out). PSReadLine announces its read
+      // loop with ESC[?1h (DECCKM) or an ESC[6n cursor query — wait for that
+      // signature before touching input. Soft timeout: a PS hosting without
+      // PSReadLine proceeds as before.
+      banner += await this._waitForSequence(/\x1b\[\?1h|\x1b\[6n/, PSREADLINE_WAIT_MS);
+    }
     // Run shell-specific init commands after banner
     await this._initShell();
     return stripAnsi(banner).trim();
@@ -1019,6 +1034,42 @@ export class PtySession {
    */
   _wrapPaste(text) {
     return this._bracketedPaste ? `\x1b[200~${text}\x1b[201~` : text;
+  }
+
+  /**
+   * Collect output until it matches a control-sequence regex, or time out.
+   * Scans only the buffer tail: the sequences of interest are short and
+   * always arrive last. Resolves with the newly collected text ('' on
+   * timeout) so callers can keep composing banner output.
+   *
+   * @param {RegExp} re
+   * @param {number} timeoutMs
+   * @returns {Promise<string>}
+   */
+  _waitForSequence(re, timeoutMs) {
+    return new Promise((resolve) => {
+      const startedAt = this._buffer.length;
+      let done = false;
+      let timer;
+      const finish = (matched) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const idx = this._dataListeners.indexOf(onData);
+        if (idx !== -1) this._dataListeners.splice(idx, 1);
+        resolve(matched ? this._buffer.slice(startedAt) : '');
+      };
+      const test = () => re.test(this._buffer.slice(-256));
+      const onData = () => {
+        if (test()) finish(true);
+      };
+      if (test()) {
+        finish(true);
+        return;
+      }
+      timer = setTimeout(() => finish(false), timeoutMs);
+      this._dataListeners.push(onData);
+    });
   }
 
   _wrapCommand(command, marker, cwdMarker, preMarker) {
