@@ -264,6 +264,15 @@ export class PtySession {
 
   async _initShell() {
     if (this.shellType === 'powershell') {
+      // PSReadLine starts late on slow machines (observed on CI runners):
+      // anything written before it takes over the console can lose its line
+      // break and merge with the NEXT write — the init text and the first
+      // exec command ended up as one parse-error line, so every marker-based
+      // exec timed out. An empty Enter submits any half-typed line first, and
+      // waiting for the prompt to settle before and after keeps the init
+      // command on its own line.
+      this.process.write('\r');
+      await this._readUntilIdle(1500, 400);
       this.process.write('$ProgressPreference = \'SilentlyContinue\'\r');
       await this._readUntilIdle(3000, 500);
     } else if (this.shellType === 'cmd') {
