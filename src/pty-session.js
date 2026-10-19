@@ -12,7 +12,17 @@ const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB
 const HISTORY_MAX_LINES = 10_000;
 const BANNER_WAIT_MS = 2000;
 const BANNER_IDLE_MS = 500;
+/** How long waitForBanner waits for PSReadLine's read-loop signature before
+ *  giving up and proceeding (soft timeout — old PS without PSReadLine). */
+const PSREADLINE_WAIT_MS = 10_000;
 export const DEFAULT_EXEC_MAX_LINES = 200;
+export const DEFAULT_EXEC_MAX_BYTES = 128 * 1024;
+/** Cap applied to any single output line: maxLines says nothing about line width,
+ *  and one giant line (minified bundle, base64 blob) would otherwise blow the
+ *  caller's context. Head + notice + tail keeps both ends visible. */
+const MAX_LINE_CHARS = 2000;
+const LINE_HEAD_CHARS = 1000;
+const LINE_TAIL_CHARS = 400;
 export const DEFAULT_READ_MAX_LINES = 200;
 export const DEFAULT_HISTORY_LIMIT = 200;
 export const DEFAULT_HISTORY_FORMAT = 'lines';
@@ -21,6 +31,12 @@ const DEFAULT_WAIT_TAIL_LINES = 50;
 /** Wait patterns are scanned in windows, so `^`/`$` use per-line semantics. */
 export const WAIT_PATTERN_FLAGS = 'm';
 const PROGRESS_INTERVAL_MS = 1000;
+/** PowerShell here-string opener (`@'` / `@"`) as the last token on a line —
+ *  the only legal placement, so any hit is a real here-string. */
+const PS_HERE_STRING_OPENER = /@(?:'|\")[^\S\r\n]*$/m;
+/** POSIX heredoc redirect (`<<EOF`, `<<- 'EOF'`, …). Lookarounds exclude
+ *  here-strings (`<<<word`) and plain `<` redirects. */
+const HEREDOC_REDIRECT = /(?<!<)<<(?!<)-?\s*[\'\"]?[A-Za-z_][\w-]*/;
 /** Written input whose echo has not arrived yet is dropped after this long,
  *  so a never-echoed write (password prompt, echo off) cannot arm the
  *  echo mask against unrelated output indefinitely. */
@@ -187,6 +203,12 @@ export class PtySession {
     this._pendingEcho = '';
     /** When _pendingEcho was last extended/renewed. */
     this._pendingEchoAt = 0;
+    /** Tail of recent output used to spot terminal queries split across chunks. */
+    this._queryCarry = '';
+    /** Shell has bracketed paste enabled (it announced ESC[?2004h): programmatic
+     *  writes can be wrapped in ESC[200~..ESC[201~ so the line editor inserts
+     *  them verbatim instead of re-rendering per chunk. */
+    this._bracketedPaste = false;
 
     const env = buildSessionEnv(customEnv);
 
@@ -201,6 +223,7 @@ export class PtySession {
 
     this.process.onData((data) => {
       this.lastActivity = Date.now();
+      this._answerTerminalQueries(data);
       this._consumePendingEchoData(data);
       this._buffer += data;
       this._totalBytesEmitted += data.length;
@@ -234,7 +257,20 @@ export class PtySession {
    * @returns {Promise<string>}
    */
   async waitForBanner() {
-    const banner = await this._readUntilIdle(BANNER_WAIT_MS, BANNER_IDLE_MS);
+    let banner = await this._readUntilIdle(BANNER_WAIT_MS, BANNER_IDLE_MS);
+    if (this.shellType === 'powershell') {
+      // PSReadLine can start SECONDS after the process on slow machines (CI
+      // runners). Before its read loop is live, the tty stays in canonical
+      // mode: kernel echo mangles the stream, written CRs become dead keys,
+      // and everything written in that window merges into ONE edit line when
+      // the line editor finally reads the queue (init + first exec command =
+      // one parse error, every marker times out). Its console-init signature
+      // (ESC[?1h) arrives too early to be safe either — the first PROMPT
+      // render is the real "reading input now" signal. Wait for a quiet,
+      // prompt-shaped last line before touching input; soft timeout keeps
+      // exotic prompts working exactly as before.
+      banner += await this._waitForPromptShellReady(PSREADLINE_WAIT_MS);
+    }
     // Run shell-specific init commands after banner
     await this._initShell();
     return stripAnsi(banner).trim();
@@ -242,6 +278,15 @@ export class PtySession {
 
   async _initShell() {
     if (this.shellType === 'powershell') {
+      // PSReadLine starts late on slow machines (observed on CI runners):
+      // anything written before it takes over the console can lose its line
+      // break and merge with the NEXT write — the init text and the first
+      // exec command ended up as one parse-error line, so every marker-based
+      // exec timed out. An empty Enter submits any half-typed line first, and
+      // waiting for the prompt to settle before and after keeps the init
+      // command on its own line.
+      this.process.write('\r');
+      await this._readUntilIdle(1500, 400);
       this.process.write('$ProgressPreference = \'SilentlyContinue\'\r');
       await this._readUntilIdle(3000, 500);
     } else if (this.shellType === 'cmd') {
@@ -257,19 +302,27 @@ export class PtySession {
    * @param {object} opts
    * @param {string} opts.command
    * @param {number} [opts.timeout=30000]
-   * @param {number} [opts.maxLines=100]
+   * @param {number} [opts.maxLines=200]
+   * @param {number} [opts.maxOutputBytes=131072] - Total output byte cap
    * @param {number} [opts.quietExitMs] - Return early if output is silent for this long after first output
    * @param {number} [opts.minOutputBytes=1] - Require at least this many bytes before quiet detection
    * @param {Function} [opts.sendNotification] - MCP sendNotification function for progress
    * @param {string|number} [opts.progressToken] - Progress token from client
    * @returns {Promise<{ output: string, exitCode: number|null, cwd: string|null, timedOut: boolean, quietExited?: boolean, hint?: string }>}
    */
-  async exec({ command, timeout = 30000, maxLines = DEFAULT_EXEC_MAX_LINES, quietExitMs, minOutputBytes = 1, sendNotification, progressToken }) {
+  async exec({ command, timeout = 30000, maxLines = DEFAULT_EXEC_MAX_LINES, maxOutputBytes = DEFAULT_EXEC_MAX_BYTES, quietExitMs, minOutputBytes = 1, sendNotification, progressToken }) {
     if (this.busy) {
       throw new Error(`Session ${this.id} is busy with a background command. Wait for it to finish, or use terminal_read to check output, or terminal_send_key("ctrl+c") to abort it. For long-running commands (dev servers, watchers) use terminal_run_background instead.`);
     }
     if (!this.alive) {
       throw new Error(`Session ${this.id} is no longer alive.`);
+    }
+    // Multi-line here-strings/heredocs cannot survive this wrapper (see
+    // _validateCommandForPty): fail fast with the workaround instead of
+    // hanging the session until the timeout.
+    const inputError = this._validateCommandForPty(command);
+    if (inputError) {
+      throw new Error(inputError);
     }
 
     this.busy = true;
@@ -281,7 +334,7 @@ export class PtySession {
     const wrappedCommand = this._wrapCommand(command, marker, cwdMarker, preMarker);
 
     try {
-      this.process.write(wrappedCommand + '\r');
+      this.process.write(this._wrapPaste(wrappedCommand) + '\r');
       // The echo of the wrapped command can still be streaming when a
       // concurrent/later waitForPattern anchors at the stream end (slow
       // winpty/cmd input echo); remember it so it can be masked.
@@ -295,6 +348,8 @@ export class PtySession {
       const { output, exitCode, cwd } = this._parseOutput(raw, marker, cwdMarker, preMarker);
       if (cwd) this.cwd = cwd;
 
+      const continuationHint = (timedOut || quietExited) ? this._continuationHint(raw) : null;
+
       if (markerFound) {
         this.busy = false;
         this._pendingMarker = null;
@@ -303,12 +358,15 @@ export class PtySession {
       }
 
       return {
-        output: this._truncateOutput(output, maxLines),
+        output: this._truncateBytes(this._truncateOutput(output, maxLines), maxOutputBytes),
         exitCode: markerFound ? exitCode : null,
         cwd: this.cwd,
         timedOut,
         ...(quietExited && { quietExited: true }),
-        ...((timedOut || quietExited) && { hint: 'Command is still running in the background. Session remains busy. Use terminal_read to get new output, or terminal_send_key("ctrl+c") to abort. Prefer terminal_run_background for long-running commands.' }),
+        ...((timedOut || quietExited) && {
+          hint: continuationHint
+            ?? 'Command is still running in the background. Session remains busy. Use terminal_read to get new output, or terminal_send_key("ctrl+c") to abort. Prefer terminal_run_background for long-running commands.',
+        }),
       };
     } catch (err) {
       this.busy = false;
@@ -739,7 +797,26 @@ export class PtySession {
       try { isWindows ? this.process.kill() : this.process.kill(signal); } catch {}
     }
     this._pendingEcho = '';
+    // node-pty's winpty path never releases its pipe sockets or its conout
+    // worker thread on kill() (the ConPTY path disposes them, winpty does
+    // not). Each leaked socket/worker keeps the event loop alive forever, so
+    // a server that stops sessions would accumulate dead handles. Release
+    // them explicitly.
+    this._releasePtyResources();
     this.alive = false;
+  }
+
+  /** Release node-pty's leftover pipes and conout worker (no-op when absent). */
+  _releasePtyResources() {
+    const agent = this.process?._agent;
+    for (const socket of [this.process?._socket, agent?.inSocket]) {
+      try { socket?.destroy?.(); } catch {
+        // Best-effort cleanup; never mask the original kill result.
+      }
+    }
+    try { agent?._conoutSocketWorker?.dispose?.(); } catch {
+      // Same: dispose schedules worker termination, it never throws loudly.
+    }
   }
 
   /** Platform hook (overridable in tests). */
@@ -843,12 +920,193 @@ export class PtySession {
     }
   }
 
+  /**
+   * Reject multi-line constructs that cannot survive this wrapper.
+   *
+   * The PTY feeds input to the shell line by line, and PSReadLine can eat
+   * characters while it renders mid-paste (an eaten `@'` opener turns every
+   * apostrophe in the body into a string delimiter: `Unexpected token`).
+   * Heredocs are worse: the completion markers appended after the command
+   * land on the closing-delimiter line, so the delimiter never matches and
+   * the shell keeps reading the body forever. Failing fast with the
+   * workaround beats a timeout plus a busy session every time.
+   *
+   * @param {string} command
+   * @returns {string|null} error message, or null when the command is safe
+   */
+  _validateCommandForPty(command) {
+    if (typeof command !== 'string') return null;
+    // The opener regex only matches at end-of-line (or end-of-input): legal
+    // here-string placement. Even a lone opener with the body meant to follow
+    // via terminal_write is doomed — the wrapper's markers get swallowed by
+    // the here-string, so it still hangs. Same for any heredoc redirect: its
+    // body always starts on the next line, which the wrapper's markers then
+    // occupy.
+    if (this.shellType === 'powershell' && PS_HERE_STRING_OPENER.test(command)) {
+      return 'Multi-line PowerShell here-strings (@\'...\'@ / @"..."@) are unreliable through the PTY, which feeds the shell line by line (openers get eaten, quotes break parsing). Write the payload to a file instead (terminal_write_file) and reference it: e.g. gh pr create --body-file <path>, or --body "$(Get-Content <path> -Raw)".';
+    }
+    if (this.shellType !== 'powershell' && this.shellType !== 'cmd' && HEREDOC_REDIRECT.test(command)) {
+      return 'Multi-line heredocs (<<EOF) never terminate through this tool: the completion markers appended after the command land on the closing-delimiter line, so the shell keeps reading the heredoc body forever. Write the payload to a file instead (terminal_write_file) and reference it: e.g. gh pr create --body-file <path>, or command < <path>.';
+    }
+    return null;
+  }
+
+  /**
+   * When a command does not complete, check whether the shell is showing a
+   * continuation prompt — an unterminated statement (here-string, quote, open
+   * block) — and return a hint that says exactly that instead of the generic
+   * "still running" message.
+   *
+   * Prompt renders arrive with absolute cursor addressing (ESC[r;cH) and no
+   * preceding newline, so the prompt can sit at the END of a split line full
+   * of render residue — match by suffix, per shell type. PowerShell's
+   * primary prompt also ends in `>`, so PS requires the doubled `>>`.
+   *
+   * @param {string} buffer raw PTY output
+   * @returns {string|null}
+   */
+  _continuationHint(buffer) {
+    const lines = stripAnsi(String(buffer ?? '')).split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const isContinuation = this.shellType === 'powershell'
+        ? />> ?$/.test(line)
+        : this.shellType === 'cmd'
+          ? /More\? ?$/.test(line)
+          : /> ?$/.test(line);
+      if (isContinuation) {
+        const closer = this.shellType === 'cmd' ? 'the closing quote or parenthesis' : 'the closing line';
+        return `The shell is stuck at a continuation prompt (${this.shellType === 'cmd' ? 'More?' : line.slice(-2).trim()}): an unterminated ${this.shellType === 'powershell' ? 'PowerShell statement (here-string, quote, or open block)' : this.shellType === 'cmd' ? 'cmd.exe statement (unclosed quote or block)' : 'quote or heredoc body'}. Send ${closer} with terminal_write, or abort with terminal_send_key("ctrl+c").`;
+      }
+      return null;
+    }
+    return null;
+  }
+
+  /**
+   * Answer terminal control queries embedded in the output stream.
+   *
+   * We are the terminal. Unix PSReadLine (and zle) send a DSR cursor-position
+   * request (ESC[6n) right after initializing and BLOCK until the terminal
+   * replies ESC[<row>;<col>R; some clients also send a Device Attributes
+   * query (ESC[c). A real terminal answers both — a bare PTY host answers
+   * neither, so the very first command in a pwsh session on Linux/macOS
+   * hangs forever (observed: GitHub Actions runners; the echoed command is
+   * followed by ESC[?1h ESC= ESC[6n and nothing else ever arrives).
+   * Replies: DSR -> cursor at 1;1 (position math may render slightly off in
+   * the interactive editor; markers and output are unaffected), DA -> VT100.
+   *
+   * @param {string} data new output chunk
+   */
+  _answerTerminalQueries(data) {
+    let rest = this._queryCarry + data;
+    try {
+      if (rest.includes('\x1b[?2004h')) this._bracketedPaste = true;
+      if (rest.includes('\x1b[?2004l')) this._bracketedPaste = false;
+      let at;
+      while ((at = rest.indexOf('\x1b[6n')) !== -1) {
+        this.process.write('\x1b[1;1R');
+        rest = rest.slice(at + 4);
+      }
+      if (rest.includes('\x1b[c') || rest.includes('\x1b[0c')) {
+        this.process.write('\x1b[?1;2c');
+        rest = rest.replace(/\x1b\[0?c/g, '');
+      }
+    } catch {
+      // The PTY can die between onData and write; the onExit handler owns
+      // that transition — never throw from inside the data listener.
+    }
+    this._queryCarry = rest.slice(-8);
+  }
+
+  /**
+   * Wrap a programmatic write in bracketed-paste markers when the shell has
+   * the mode enabled. Long pasted lines otherwise make PSReadLine re-render
+   * after every chunk and query the cursor between renders — and with a bare
+   * PTY host answering every DSR as "1;1", that loop never terminates and the
+   * command is never submitted (observed on Linux pwsh; the short init line
+   * worked, the 300-char wrapped command hung). Wrapped as a paste, the line
+   * editor inserts the text verbatim and the following '\r' submits it.
+   *
+   * @param {string} text
+   * @returns {string}
+   */
+  _wrapPaste(text) {
+    return this._bracketedPaste ? `\x1b[200~${text}\x1b[201~` : text;
+  }
+
+  /**
+   * Wait until PowerShell looks interactive: the last non-empty output line
+   * is prompt-shaped (ends in a prompt terminator like `> `, `$ `, `# `,
+   * `% ` or `❯ ` — default PS, posh-git, starship all qualify) AND output has
+   * been quiet for a beat, so startup rendering is finished and the line
+   * editor is waiting for input. Resolves with newly collected text ('' when
+   * already satisfied or on soft timeout).
+   *
+   * @param {number} timeoutMs
+   * @returns {Promise<string>}
+   */
+  _waitForPromptShellReady(timeoutMs) {
+    const PROMPTISH = /[>#$%❯] ?$/;
+    return new Promise((resolve) => {
+      const startedAt = this._buffer.length;
+      let lastChunkAt = Date.now();
+      let done = false;
+      let timer;
+      const ready = () => {
+        const text = stripAnsi(this._buffer).slice(-512);
+        const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        const last = lines[lines.length - 1] ?? '';
+        return PROMPTISH.test(last) && Date.now() - lastChunkAt >= BANNER_IDLE_MS;
+      };
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        clearInterval(timer);
+        const idx = this._dataListeners.indexOf(onData);
+        if (idx !== -1) this._dataListeners.splice(idx, 1);
+        resolve(ok ? this._buffer.slice(startedAt) : '');
+      };
+      const onData = () => {
+        lastChunkAt = Date.now();
+      };
+      timer = setInterval(() => {
+        if (ready()) finish(true);
+      }, 100);
+      this._dataListeners.push(onData);
+      if (ready()) {
+        finish(true);
+        return;
+      }
+      setTimeout(() => finish(false), timeoutMs);
+    });
+  }
+
   _wrapCommand(command, marker, cwdMarker, preMarker) {
     switch (this.shellType) {
       case 'powershell':
-        return `Write-Host "${preMarker}"; ${command}; Write-Host "${marker}_\${LASTEXITCODE}__"; Write-Host "${cwdMarker}$((Get-Location).Path)__"`;
+        // $LASTEXITCODE is only set by native executables: without clearing it,
+        // a stale value from an earlier command (or $null after cmdlet-only
+        // commands) would report the wrong exit code. Clear it first, then
+        // derive the code from $? so cmdlets and native commands are both
+        // reported accurately.
+        return `Write-Host "${preMarker}"; $global:LASTEXITCODE = $null; ${command}; ` +
+          `$__mcp_rc = if ($?) { if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 } } ` +
+          `else { if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 } }; ` +
+          // ${__mcp_rc} is PS's braced-variable form: bare $__mcp_rc__ would
+          // parse as a variable named "__mcp_rc__" (undefined) because
+          // underscores are valid name chars. JS needs \${ to emit it literally.
+          `Write-Host "${marker}_\${__mcp_rc}__"; Write-Host "${cwdMarker}$((Get-Location).Path)__"`;
       case 'cmd':
-        return `echo ${preMarker} & ${command} & echo ${marker}_%ERRORLEVEL%__ & echo ${cwdMarker}%CD%__`;
+        // cmd expands %ERRORLEVEL%/%CD% when it parses the LINE, which happens
+        // before execution on a single-line `&` chain: the markers would echo
+        // the PREVIOUS command's values. Writing them as a second line fixes
+        // this: cmd reads line 2 from the input buffer only after line 1
+        // finishes, so expansion reflects the executed command. Both lines go
+        // out in one write; no waiting is needed between them.
+        return `echo ${preMarker} & ${command}\r` +
+          `echo ${marker}_%ERRORLEVEL%__ & echo ${cwdMarker}%CD%__`;
       default: // bash/zsh
         return `echo "${preMarker}"; ${command}; echo "${marker}_$?__"; echo "${cwdMarker}$(pwd)__"`;
     }
@@ -1058,7 +1316,6 @@ export class PtySession {
         // The CWD marker is always the last line of the wrapped command;
         // anything after it is the next interactive prompt — stop there.
         break;
-        continue;
       }
 
       outputLines.push(line);
@@ -1070,10 +1327,11 @@ export class PtySession {
 
   /**
    * Truncate output to maxLines: head(maxLines/2) + "...omitted..." + tail(maxLines/2).
+   * Each line is additionally capped at MAX_LINE_CHARS.
    */
   _truncateOutput(output, maxLines) {
-    const lines = output.split('\n');
-    if (lines.length <= maxLines) return output;
+    const lines = output.split('\n').map((line) => this._truncateLine(line));
+    if (lines.length <= maxLines) return lines.join('\n');
 
     const headCount = Math.floor(maxLines / 2);
     const tailCount = Math.ceil(maxLines / 2);
@@ -1082,6 +1340,46 @@ export class PtySession {
     const omitted = lines.length - headCount - tailCount;
 
     return [...head, `\n... ${omitted} lines omitted ...\n`, ...tail].join('\n');
+  }
+
+  /** Cap a single oversized line, keeping head and tail with a notice. */
+  _truncateLine(line) {
+    if (line.length <= MAX_LINE_CHARS) return line;
+    const head = line.slice(0, LINE_HEAD_CHARS);
+    const tail = line.slice(-LINE_TAIL_CHARS);
+    return `${head}... [line truncated, ${line.length} chars] ...${tail}`;
+  }
+
+  /**
+   * Cap total output bytes, cutting at line boundaries: head + notice + tail.
+   * Call after _truncateOutput so lines are already width-capped.
+   */
+  _truncateBytes(output, maxBytes) {
+    const total = Buffer.byteLength(output, 'utf8');
+    if (total <= maxBytes) return output;
+
+    const lines = output.split('\n');
+    const half = Math.floor(maxBytes / 2);
+    const byteCost = (line) => Buffer.byteLength(line, 'utf8') + 1;
+
+    const head = [];
+    let headBytes = 0;
+    for (const line of lines) {
+      if (headBytes + byteCost(line) > half) break;
+      head.push(line);
+      headBytes += byteCost(line);
+    }
+
+    const tail = [];
+    let tailBytes = 0;
+    for (let i = lines.length - 1; i >= head.length; i--) {
+      if (tailBytes + byteCost(lines[i]) > half) break;
+      tail.unshift(lines[i]);
+      tailBytes += byteCost(lines[i]);
+    }
+
+    const omitted = Math.max(0, total - headBytes - tailBytes);
+    return [...head, `... ${omitted} bytes omitted ...`, ...tail].join('\n');
   }
 
   /**

@@ -109,16 +109,71 @@ test('BackgroundJobManager ensures capacity by evicting oldest finished', async 
 
   const job1 = await manager.start({ command: '1' });
   const job2 = await manager.start({ command: '2' });
-  
+
   // Mark job1 as finished
   job1._child.emit('close', 0, null);
-  
+
   // Starting a 3rd job should evict job1 (max 2)
   const job3 = await manager.start({ command: '3' });
-  
+
   const list = manager.list();
   assert.equal(list.length, 2);
   assert.ok(list.some(j => j.id === job2.id));
   assert.ok(list.some(j => j.id === job3.id));
   assert.ok(!list.some(j => j.id === job1.id));
+});
+
+async function startMockJob() {
+  const child = createMockChild();
+  const manager = new BackgroundJobManager({
+    spawn: () => {
+      setTimeout(() => child.emit('spawn'), 1);
+      return child;
+    },
+    detectShell: () => ({ shell: 'sh', args: [] }),
+    resolveCwd: async () => '/',
+    logDir: null,
+  });
+  const job = await manager.start({ command: 'echo hello' });
+  return { job, child };
+}
+
+test('waitUntilExit resolves immediately for an exited job with output tail', async () => {
+  const { job, child } = await startMockJob();
+  child.stdout.emit('data', 'done output\n');
+  child.emit('close', 7, null);
+
+  const result = await job.waitUntilExit({ timeout: 5000, maxLines: 10 });
+
+  assert.equal(result.reason, 'exit');
+  assert.equal(result.exitCode, 7);
+  assert.equal(result.alive, false);
+  assert.equal(result.output, 'done output');
+});
+
+test('waitUntilExit blocks until the job exits', async () => {
+  const { job, child } = await startMockJob();
+  child.stdout.emit('data', 'working\n');
+
+  const resultPromise = job.waitUntilExit({ timeout: 5000 });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(job.alive, true, 'should still be waiting');
+
+  child.emit('close', 0, null);
+  const result = await resultPromise;
+
+  assert.equal(result.reason, 'exit');
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.alive, false);
+  assert.ok(result.output.includes('working'));
+});
+
+test('waitUntilExit returns timeout status while the job is still running', async () => {
+  const { job } = await startMockJob();
+
+  const result = await job.waitUntilExit({ timeout: 30 });
+
+  assert.equal(result.reason, 'timeout');
+  assert.equal(result.alive, true);
+  assert.equal(result.exitCode, null);
 });

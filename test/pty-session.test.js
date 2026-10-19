@@ -42,14 +42,38 @@ test('buildSessionEnv skips noninteractive override on Windows', () => {
   }
 });
 
-test('PowerShell wrapper uses safe marker interpolation', () => {
+test('PowerShell wrapper derives exit code from $? with cleared LASTEXITCODE', () => {
   const session = createSession();
   session.shellType = 'powershell';
 
   const command = session._wrapCommand('echo hi', '__DONE__', '__CWD_', '__PRE__');
 
-  assert.match(command, /__DONE___\$\{LASTEXITCODE\}__/);
+  // $LASTEXITCODE must be cleared before the command so a stale value from an
+  // earlier native command cannot leak into this command's exit code.
+  assert.match(command, /\$global:LASTEXITCODE = \$null; echo hi;/);
+  // The reported code is derived from $? (cmdlet success) falling back to
+  // $LASTEXITCODE when a native executable set it.
+  assert.match(command, /\$__mcp_rc = if \(\$\?\)/);
+  assert.match(command, /if \(\$null -ne \$LASTEXITCODE\) \{ \$LASTEXITCODE \} else \{ 0 \}/);
+  assert.match(command, /else \{ if \(\$null -ne \$LASTEXITCODE\) \{ \$LASTEXITCODE \} else \{ 1 \} \}/);
+  // The marker reports the derived code via PS's braced-variable form:
+  // bare "$__mcp_rc__" would parse as a variable named "__mcp_rc__"
+  // (undefined) because underscores are valid name chars.
+  assert.match(command, /__DONE___\$\{__mcp_rc\}__/);
   assert.match(command, /__CWD_\$\(\(Get-Location\)\.Path\)__/);
+});
+
+test('cmd wrapper emits markers on a second line for fresh %ERRORLEVEL%/%CD%', () => {
+  const session = createSession();
+  session.shellType = 'cmd';
+
+  const command = session._wrapCommand('echo hi', '__DONE__', '__CWD_', '__PRE__');
+
+  // cmd expands %VAR% when parsing the line: markers must live on a separate
+  // line, written after the command line, or they echo the PREVIOUS values.
+  const [firstLine, secondLine] = command.split('\r');
+  assert.equal(firstLine, 'echo __PRE__ & echo hi');
+  assert.equal(secondLine, 'echo __DONE___%ERRORLEVEL%__ & echo __CWD_%CD%__');
 });
 
 test('_initShell suppresses PowerShell progress output', async () => {
@@ -65,7 +89,9 @@ test('_initShell suppresses PowerShell progress output', async () => {
 
   await session._initShell();
 
-  assert.deepEqual(writes, ["$ProgressPreference = 'SilentlyContinue'\r"]);
+  // The empty Enter first submits any half-typed line left over from a slow
+  // PSReadLine startup, so the init command always lands on its own line.
+  assert.deepEqual(writes, ["\r", "$ProgressPreference = 'SilentlyContinue'\r"]);
   assert.equal(resetCalls, 1);
 });
 
@@ -119,6 +145,283 @@ test('_truncateOutput keeps the head and tail when output exceeds maxLines', () 
     session._truncateOutput(output, 4),
     ['line 1', 'line 2', '', '... 2 lines omitted ...', '', 'line 5', 'line 6'].join('\n')
   );
+});
+
+test('_truncateOutput caps oversized single lines with a head+tail notice', () => {
+  const session = createSession();
+  const giant = 'x'.repeat(5000);
+  const output = [`before`, giant, 'after'].join('\n');
+
+  const result = session._truncateOutput(output, 10);
+
+  const lines = result.split('\n');
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], 'before');
+  assert.equal(lines[2], 'after');
+  assert.ok(lines[1].length < 1600, `line should be capped, got ${lines[1].length}`);
+  assert.match(lines[1], /\[line truncated, 5000 chars\]/);
+  assert.ok(lines[1].startsWith('x'.repeat(1000)));
+  assert.ok(lines[1].endsWith('x'.repeat(400)));
+});
+
+test('_truncateBytes returns output unchanged under the cap', () => {
+  const session = createSession();
+  const output = 'a'.repeat(100);
+
+  assert.equal(session._truncateBytes(output, 1024), output);
+});
+
+test('_truncateBytes keeps head and tail lines with a byte notice over the cap', () => {
+  const session = createSession();
+  const lines = Array.from({ length: 100 }, (_, i) => `line-${String(i).padStart(3, '0')}`);
+  const output = lines.join('\n'); // ~900 bytes total
+  const cap = 300;
+
+  const result = session._truncateBytes(output, cap);
+  const resultLines = result.split('\n');
+
+  assert.ok(resultLines.length < lines.length);
+  assert.equal(resultLines[0], 'line-000');
+  assert.equal(resultLines.at(-1), 'line-099');
+  const notice = resultLines.find((l) => l.includes('bytes omitted'));
+  assert.ok(notice, 'should contain an omission notice');
+  assert.ok(Buffer.byteLength(result, 'utf8') < cap + 200);
+});
+
+test('exec applies the maxOutputBytes cap to command output', async () => {
+  const session = createSession();
+  session.id = 's1';
+  session.alive = true;
+  session.busy = false;
+  session.shellType = 'bash';
+  session.cwd = '/repo';
+  session.process = { write: () => {} };
+  session._resetBuffer = () => {};
+  session._waitForMarker = async () => ({ buffer: 'raw', reason: 'marker' });
+  const giant = Array.from({ length: 500 }, (_, i) => `data-line-${i}-` + 'x'.repeat(20)).join('\n');
+  session._parseOutput = () => ({ output: giant, exitCode: 0, cwd: null });
+
+  const result = await session.exec({ command: 'big-cmd', timeout: 1000, maxLines: 10000, maxOutputBytes: 4096 });
+
+  assert.ok(Buffer.byteLength(result.output, 'utf8') < 4300, 'byte cap should be applied');
+  assert.match(result.output, /bytes omitted/);
+  assert.ok(result.output.includes('data-line-0'));
+  assert.ok(result.output.includes('data-line-499'));
+});
+
+test('_validateCommandForPty rejects PowerShell here-strings, terminated or not', () => {
+  const session = createSession();
+  session.shellType = 'powershell';
+
+  const terminated = "gh pr create --title t --body @'\nline with 'apostrophes'\n'@";
+  assert.ok(session._validateCommandForPty(terminated), 'terminated here-string must be rejected');
+  assert.match(session._validateCommandForPty(terminated), /terminal_write_file.*--body-file/s);
+
+  // Lone opener, body meant to follow via terminal_write: still doomed (the
+  // wrapper's markers get swallowed by the here-string).
+  assert.ok(session._validateCommandForPty("gh pr create --body @'"));
+  // @" variant
+  assert.ok(session._validateCommandForPty('$x = @"\nbody\n"@'));
+
+  // Safe commands: opener must sit at end-of-line to be a real here-string.
+  assert.equal(session._validateCommandForPty("Write-Host 'hi' ; echo a@b.com"), null);
+  assert.equal(session._validateCommandForPty('git status'), null);
+  assert.equal(session._validateCommandForPty("if (1) {\n  Write-Host 'block'\n}"), null);
+});
+
+test('_validateCommandForPty rejects heredocs on POSIX shells, keeps here-strings and redirects', () => {
+  const session = createSession();
+  session.shellType = 'bash';
+
+  assert.ok(session._validateCommandForPty("cat <<'EOF'\nbody\nEOF"), 'quoted heredoc must be rejected');
+  assert.ok(session._validateCommandForPty('cat <<-EOF\nbody\n	EOF'), 'dash variant must be rejected');
+  assert.ok(session._validateCommandForPty('cat <<EOF'), 'heredoc without body still hangs: rejected');
+  assert.match(session._validateCommandForPty('cat <<EOF'), /never terminate.*--body-file/s);
+
+  // Safe: here-string (<<<), plain redirects, output duplication. A quoted
+  // 'a << b' can false-positive like a spaced '<< EOF' heredoc — accepted:
+  // syntax alone cannot tell them apart, and the error's workaround (use a
+  // file) is benign.
+  assert.equal(session._validateCommandForPty('cat <<<"$var"'), null);
+  assert.equal(session._validateCommandForPty('cmd < input.txt'), null);
+  assert.equal(session._validateCommandForPty('npm test 2>&1 | tee log'), null);
+});
+
+test('_validateCommandForPty leaves cmd.exe and unknown shells without heredoc syntax alone', () => {
+  const session = createSession();
+  session.shellType = 'cmd';
+  assert.equal(session._validateCommandForPty("echo @' weird\ndir"), null);
+  assert.equal(session._validateCommandForPty('dir & echo done'), null);
+});
+
+test('exec fails fast on here-string/heredoc commands without writing to the PTY', async () => {
+  const session = createSession();
+  session.id = 's1';
+  session.alive = true;
+  session.busy = false;
+  session.shellType = 'powershell';
+  const writes = [];
+  session.process = { write: (v) => writes.push(v) };
+  session._resetBuffer = () => {};
+
+  await assert.rejects(
+    session.exec({ command: "gh pr create --body @'\nbody\n'@", timeout: 100 }),
+    /here-strings.*terminal_write_file/s,
+  );
+  assert.deepEqual(writes, [], 'nothing must be written to the PTY');
+  assert.equal(session.busy, false, 'session must not stay busy after the guard throws');
+});
+
+test('_continuationHint names the stuck prompt on timeout', () => {
+  const session = createSession();
+
+  session.shellType = 'powershell';
+  const ps = session._continuationHint('PS C:\\repo> gh pr create --body @\'\r\n>> ');
+  assert.match(ps, /continuation prompt \(>>\)/);
+  assert.match(ps, /terminal_write/);
+
+  session.shellType = undefined;
+  const posix = session._continuationHint('$ cat <<EOF\r\nbody\r\n> ');
+  assert.match(posix, /continuation prompt \(>\)/);
+  assert.match(posix, /heredoc/);
+
+  session.shellType = 'cmd';
+  const cmdMore = session._continuationHint('C:\\repo> echo "open\r\nMore? ');
+  assert.match(cmdMore, /More\?/);
+  session.shellType = undefined;
+
+  // Normal trailing prompt/output: no continuation hint. A PowerShell PRIMARY
+  // prompt ends in a single `>` — must NOT be treated as continuation.
+  session.shellType = 'powershell';
+  assert.equal(session._continuationHint('done\r\nPS C:\\repo> '), null);
+  session.shellType = undefined;
+  assert.equal(session._continuationHint(''), null);
+  assert.equal(session._continuationHint('done\r\nuser@host:~$ '), null);
+  // ANSI-colored prompt must not defeat detection.
+  assert.match(session._continuationHint('\u001b[32m>>\u001b[0m '), />>/);
+  // CI shape: PSReadLine renders the continuation prompt with absolute cursor
+  // addressing and no newline — the `>>` lands at the END of a line full of
+  // render residue. Must still be detected.
+  const ciShape = 'Write-Host "__MCP_CWD_$((Get-Location).Path)__"\u001b[4;25H\u001b[?12l\u001b[5;1H\u001b[0m\u001b[37m>> \u001b[39;49m\u001b[5;4H\u001b[?25h';
+  assert.match(session._continuationHint(ciShape), /continuation prompt \(>>\)/);
+});
+
+test('_answerTerminalQueries replies to DSR and DA requests like a terminal', () => {
+  const session = createSession();
+  const writes = [];
+  session.process = { write: (v) => writes.push(v) };
+
+  // DSR cursor-position request: Unix PSReadLine blocks on this after init.
+  session._answerTerminalQueries('some output\u001b[?1h\u001b=\u001b[6n');
+  assert.deepEqual(writes, ['\u001b[1;1R']);
+
+  // Device Attributes query.
+  writes.length = 0;
+  session._answerTerminalQueries('\u001b[c');
+  assert.deepEqual(writes, ['\u001b[?1;2c']);
+
+  // Split across chunks: the query may straddle onData boundaries.
+  writes.length = 0;
+  session._answerTerminalQueries('tail ends with \u001b[6');
+  assert.deepEqual(writes, []);
+  session._answerTerminalQueries('n more output');
+  assert.deepEqual(writes, ['\u001b[1;1R']);
+
+  // Ordinary output never triggers a reply.
+  writes.length = 0;
+  session._answerTerminalQueries('plain text 123 and [6n but no ESC');
+  assert.deepEqual(writes, []);
+});
+
+test('_answerTerminalQueries survives a dead PTY without throwing', () => {
+  const session = createSession();
+  session.process = { write: () => { throw new Error('EPIPE'); } };
+  assert.doesNotThrow(() => session._answerTerminalQueries('\u001b[6n'));
+});
+
+test('bracketed paste: mode announcements are tracked and exec wraps its write', async () => {
+  const session = createSession();
+  const writes = [];
+  session.process = { write: (v) => writes.push(v) };
+  session._bracketedPaste = false;
+  assert.equal(session._wrapPaste('cmd'), 'cmd', 'no wrapping before the shell enables the mode');
+
+  session._answerTerminalQueries('\u001b[?2004h');
+  assert.equal(session._bracketedPaste, true);
+  assert.equal(session._wrapPaste('cmd'), '\u001b[200~cmd\u001b[201~');
+
+  session._answerTerminalQueries('\u001b[?2004l');
+  assert.equal(session._bracketedPaste, false, 'mode-off announcement clears the flag');
+});
+
+test('_waitForPromptShellReady waits for a quiet, prompt-shaped last line', async () => {
+  const session = createWaitSession('');
+
+  // Already satisfied: prompt-shaped last line, no output for a while.
+  session._buffer = 'Windows PowerShell\r\nPS C:\\repo> ';
+  assert.equal(await session._waitForPromptShellReady(200), '');
+
+  // Chatty shell: a prompt line exists but output keeps flowing — never
+  // ready, soft timeout returns ''.
+  session._buffer = 'PS /tmp> ';
+  const chatty = session._waitForPromptShellReady(350);
+  const pump = setInterval(() => {
+    session._buffer += 'x';
+    session._dataListeners.at(-1)('x');
+  }, 80);
+  assert.equal(await chatty, '', 'continuous output must not count as ready');
+  clearInterval(pump);
+
+  // Output stops on a prompt line: ready once the quiet window elapses,
+  // resolving with the text collected since the call.
+  session._buffer = '';
+  const waiting = session._waitForPromptShellReady(2000);
+  setTimeout(() => {
+    session._buffer += 'PS /tmp> ';
+    session._dataListeners.at(-1)('PS /tmp> ');
+  }, 50);
+  assert.equal(await waiting, 'PS /tmp> ');
+});
+
+test('exec writes the command as a bracketed paste when the mode is on', async () => {
+  const session = createSession();
+  session.id = 's1';
+  session.alive = true;
+  session.busy = false;
+  session.shellType = 'bash';
+  session.cwd = '/repo';
+  session._bracketedPaste = true;
+  const writes = [];
+  session.process = { write: (v) => writes.push(v) };
+  session._resetBuffer = () => {};
+  session._waitForMarker = async () => ({ buffer: 'raw', reason: 'marker' });
+  session._parseOutput = () => ({ output: '', exitCode: 0, cwd: null });
+
+  await session.exec({ command: 'echo hi', timeout: 1000 });
+
+  assert.equal(writes.length, 1);
+  assert.match(writes[0], /^\u001b\[200~/);
+  assert.match(writes[0], /echo hi/);
+  assert.match(writes[0], /\u001b\[201~\r$/, 'Enter stays outside the paste so it submits the line');
+});
+
+test('exec timeout over a continuation prompt reports the specific hint', async () => {
+  const session = createSession();
+  session.id = 's1';
+  session.alive = true;
+  session.busy = false;
+  session.shellType = 'powershell';
+  session.cwd = 'C:\\repo';
+  session.process = { write: () => {} };
+  session._resetBuffer = () => {};
+  session._waitForMarker = async () => ({ buffer: "PS> gh pr create --body @'\r\n>> ", reason: 'timeout' });
+  session._parseOutput = () => ({ output: '', exitCode: null, cwd: null });
+
+  const result = await session.exec({ command: 'gh pr create --title t', timeout: 50 });
+
+  assert.equal(result.timedOut, true);
+  assert.match(result.hint, /continuation prompt/);
+  assert.ok(!result.hint.includes('still running in the background'), 'generic hint must be replaced');
 });
 
 test('read returns unread buffered output once', async () => {
