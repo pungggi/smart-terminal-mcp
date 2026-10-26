@@ -1,10 +1,9 @@
 import { stat } from 'node:fs/promises';
 import { resolve as resolvePath } from 'node:path';
-import { platform } from 'node:os';
 import { BackgroundJobManager } from './background-jobs.js';
 import { log } from './logger.js';
 import { PtySession } from './pty-session.js';
-import { detectShell, isAvailable } from './shell-detector.js';
+import { detectShell, findAvailableShell, getShellArgs } from './shell-detector.js';
 import { generateSessionId } from './session-id.js';
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -52,7 +51,7 @@ export class SessionManager {
     const resolvedCwd = await resolveSessionCwd(cwd);
     const detected = detectShell();
     const resolvedShell = shell ? resolveUserShell(shell) : detected.shell;
-    const shellArgs = shell ? [] : detected.args;
+    const shellArgs = shell ? getShellArgs(resolvedShell) : detected.args;
 
     const id = generateSessionId(new Set(this._sessions.keys()));
     const session = new this._SessionClass({
@@ -132,24 +131,14 @@ export class SessionManager {
   }
 }
 
-const WINDOWS_SHELL_EXTENSIONS = ['.exe', '.cmd', '.bat'];
-
 /**
  * Validate and resolve a user-provided shell name.
- * On Windows, tries appending common extensions if the bare name isn't found.
  * @param {string} shell
  * @returns {string} The resolved shell name
  */
 function resolveUserShell(shell) {
-  if (isAvailable(shell)) return shell;
-
-  // On Windows, try appending .exe etc. so "pwsh" resolves to "pwsh.exe"
-  if (platform() === 'win32' && !shell.includes('.')) {
-    for (const ext of WINDOWS_SHELL_EXTENSIONS) {
-      const candidate = `${shell}${ext}`;
-      if (isAvailable(candidate)) return candidate;
-    }
-  }
+  const resolved = findAvailableShell(shell);
+  if (resolved) return resolved;
 
   const detected = detectShell();
   throw new Error(

@@ -155,6 +155,32 @@ npm install
 
 ## Configuration
 
+### Shell selection
+
+Set `SMART_TERMINAL_SHELL` to a shell name or absolute path to pin the shell used by `terminal_start` when its `shell` parameter is omitted. This keeps command syntax and startup behavior consistent across MCP clients and server restarts.
+
+```json
+"env": {
+  "SMART_TERMINAL_SHELL": "pwsh"
+}
+```
+
+Shell selection follows this precedence:
+
+1. **Explicit parameter**: `terminal_start({ shell })` overrides environment settings.
+2. **Generic pin**: `SMART_TERMINAL_SHELL` applies on Windows, Linux, and macOS.
+3. **Legacy override**: `PWSH_PATH` remains available on Windows.
+4. **Auto-detection**: The existing platform-specific order applies when no usable pin is set.
+
+An unavailable `SMART_TERMINAL_SHELL` value is ignored, allowing legacy or platform detection to continue.
+
+Startup arguments match the selected shell:
+
+- **PowerShell (`pwsh` / `powershell`)**: Explicit and pinned sessions start with `-NoLogo -NoProfile`. Windows auto-detection uses the same flags.
+- **Other shells**: `cmd`, `bash`, `zsh`, `fish`, and `sh` start without added arguments.
+
+This prevents PowerShell profiles, aliases, and prompt customization from changing automation behavior between machines.
+
 ### Claude Desktop
 
 Add to your `claude_desktop_config.json`:
@@ -233,12 +259,19 @@ Execute a command with deterministic completion detection. Large outputs are tru
 
 ### `terminal_run`
 
-Run a one-shot non-interactive command using `cmd + args` with `shell=false`. Safer than `terminal_exec` for predictable automation. Output is capped by `maxOutputBytes` rather than head + tail truncation. Shell built-ins such as `dir` or `cd` are not supported. On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed. Prefer passing the target executable directly as `cmd` instead of wrapping it in `powershell -Command` or `cmd /c`, especially when Windows paths contain spaces. For tools that always exit `0`, you can require a specific exit code and/or validate a success regex against a file written by the command.
+Run a one-shot non-interactive command using `cmd + args`. The default `shell=false` is safer than `terminal_exec` for predictable automation. Output is capped by `maxOutputBytes` rather than head + tail truncation. Shell built-ins such as `dir` or `cd` require `shell=true`.
+
+With `shell=true`, the command runs through `%ComSpec%` (`cmd.exe`) on Windows and `/bin/sh` on other platforms. It does not use the session shell or `SMART_TERMINAL_SHELL`. This distinction prevents accidentally reusing PowerShell session syntax in a one-shot `cmd.exe` command.
+
+On Windows, `terminal_run` resolves `PATH`/`PATHEXT` and launches `.cmd` / `.bat` wrappers via `cmd.exe` when needed. Prefer passing the target executable directly as `cmd` instead of wrapping it in `powershell -Command` or `cmd /c`, especially when Windows paths contain spaces.
+
+For tools that always exit `0`, you can require a specific exit code and/or validate a success regex against a file written by the command.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `cmd` | string | *required* | Executable to run |
 | `args` | string[] | `[]` | Argument array passed directly to the executable |
+| `shell` | boolean | `false` | Use the OS shell for built-ins, pipes, and redirects |
 | `cwd` | string | server CWD | Working directory |
 | `timeout` | number | 30000 | Timeout in ms |
 | `maxOutputBytes` | number | 102400 | Max combined stdout/stderr bytes to capture |
