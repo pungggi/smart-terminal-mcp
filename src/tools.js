@@ -95,7 +95,7 @@ export function registerTools(server, manager) {
     'terminal_start',
     'Start a terminal session. Auto-detects shell if omitted.',
     {
-      shell: z.string().optional(),
+      shell: z.string().optional().describe('Overrides SMART_TERMINAL_SHELL'),
       cols: z.number().int().min(20).max(500).default(120),
       rows: z.number().int().min(5).max(200).default(30),
       cwd: z.string().optional(),
@@ -168,7 +168,7 @@ export function registerTools(server, manager) {
   // --- terminal_run ---
   tool(
     'terminal_run',
-    'Run a binary directly. shell=true for built-ins/pipes/redirects.',
+    'Run directly. shell=true uses OS shell, not the session shell.',
     {
       cmd: z.string(),
       args: z.array(z.string()).default([]),
@@ -183,7 +183,7 @@ export function registerTools(server, manager) {
       successExitCode: z.number().int().nullable().default(0).describe('null=any'),
       successFile: z.string().optional(),
       successFilePattern: z.string().optional().describe('Regex'),
-      shell: z.boolean().default(false).describe('Run via system shell'),
+      shell: z.boolean().default(false).describe('%ComSpec% Win; /bin/sh Unix'),
     },
     async ({ cmd, args, cwd, description, timeout, maxOutputBytes, parse, parseOnly, summary, successExitCode, successFile, successFilePattern, shell }) => {
       if (description) log(`run (${description}): ${cmd} ${args.join(' ')}`.trimEnd());

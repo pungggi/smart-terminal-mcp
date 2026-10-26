@@ -291,6 +291,20 @@ test('terminal_run can re-evaluate success from a file pattern', async () => {
   }
 });
 
+test('tool schemas document shell selection and the shell=true dialect', () => {
+  const server = createFakeServer();
+  registerTools(server, {});
+
+  const startShellDescription = getDescription(server.tools.get('terminal_start').schema.shell);
+  assert.match(startShellDescription, /SMART_TERMINAL_SHELL/);
+
+  const terminalRun = server.tools.get('terminal_run');
+  const shellDescription = getDescription(terminalRun.schema.shell);
+  assert.match(terminalRun.description, /not the session shell/i);
+  assert.match(shellDescription, /%ComSpec%/);
+  assert.match(shellDescription, /\/bin\/sh/);
+});
+
 test('terminal_run shell=true executes commands via the system shell', async () => {
   const server = createFakeServer();
   registerTools(server, {});

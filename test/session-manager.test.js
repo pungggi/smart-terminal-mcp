@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve as resolvePath } from 'node:path';
+import { delimiter, join, resolve as resolvePath } from 'node:path';
 import { SessionManager, resolveSessionCwd } from '../src/session-manager.js';
 
 test('resolveSessionCwd returns an absolute directory path', async () => {
@@ -83,6 +83,36 @@ test('SessionManager.create rejects file cwd values', async () => {
     );
     assert.equal(manager.list().length, 0);
   } finally {
+    manager.destroyAll();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SessionManager.create keeps non-interactive args for explicit PowerShell', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'smart-terminal-mcp-'));
+  const executableName = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';
+  await writeFile(join(tempDir, executableName), '', { mode: 0o755 });
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${tempDir}${delimiter}${previousPath ?? ''}`;
+
+  let shellArgs;
+  class FakeSession {
+    constructor(opts) {
+      shellArgs = opts.shellArgs;
+    }
+
+    kill() { }
+  }
+
+  const manager = new SessionManager({ SessionClass: FakeSession });
+
+  try {
+    await manager.create({ shell: 'pwsh' });
+    assert.deepEqual(shellArgs, ['-NoLogo', '-NoProfile']);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     manager.destroyAll();
     await rm(tempDir, { recursive: true, force: true });
   }
