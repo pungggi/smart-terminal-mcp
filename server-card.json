@@ -1,7 +1,7 @@
 {
   "serverInfo": {
     "name": "smart-terminal-mcp",
-    "version": "1.2.41"
+    "version": "1.2.42"
   },
   "tools": [
     {
@@ -11,7 +11,8 @@
         "type": "object",
         "properties": {
           "shell": {
-            "type": "string"
+            "type": "string",
+            "description": "Overrides SMART_TERMINAL_SHELL"
           },
           "cols": {
             "type": "integer",
@@ -100,7 +101,7 @@
     },
     {
       "name": "terminal_run",
-      "description": "Run a binary directly. shell=true for built-ins/pipes/redirects.",
+      "description": "Run directly. shell=true uses OS shell, not the session shell.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -169,7 +170,7 @@
           "shell": {
             "type": "boolean",
             "default": false,
-            "description": "Run via system shell"
+            "description": "%ComSpec% Win; /bin/sh Unix"
           }
         },
         "required": [
