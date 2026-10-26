@@ -110,11 +110,11 @@ export function getShellArgs(shell) {
  * @returns {'powershell' | 'cmd' | 'bash'}
  */
 export function getShellType(shell) {
-  const lower = shell.toLowerCase();
-  if (lower.includes('pwsh') || lower.includes('powershell')) {
+  const executable = shell.split(/[\\/]/).pop().toLowerCase();
+  if (executable.includes('pwsh') || executable.includes('powershell')) {
     return 'powershell';
   }
-  if (lower.includes('cmd')) {
+  if (executable.includes('cmd')) {
     return 'cmd';
   }
   return 'bash';

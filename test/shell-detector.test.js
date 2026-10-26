@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { detectShell, isAvailable } from '../src/shell-detector.js';
+import { detectShell, getShellArgs, getShellType, isAvailable } from '../src/shell-detector.js';
 
 const POWERSHELL_ARGS = ['-NoLogo', '-NoProfile'];
 
@@ -36,6 +36,15 @@ async function makeFakeExecutable(name) {
 
 test('isAvailable accepts an absolute executable path', () => {
   assert.equal(isAvailable(process.execPath), true);
+});
+
+test('getShellType only examines the executable basename', () => {
+  const bash = '/opt/powershell-tools/bin/bash';
+  assert.equal(getShellType(bash), 'bash');
+  assert.deepEqual(getShellArgs(bash), []);
+
+  assert.equal(getShellType('C:\\Program Files\\PowerShell\\7\\pwsh.exe'), 'powershell');
+  assert.equal(getShellType('C:\\tools\\pwsh\\bin\\cmd.exe'), 'cmd');
 });
 
 test('detectShell uses SMART_TERMINAL_SHELL with an absolute PowerShell path', async () => {
