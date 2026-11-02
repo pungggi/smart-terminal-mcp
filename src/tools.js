@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import { writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, runCommand } from './command-runner.js';
@@ -100,7 +99,7 @@ export function registerTools(server, manager) {
       rows: z.number().int().min(5).max(200).default(30),
       cwd: z.string().optional(),
       name: z.string().optional(),
-      env: z.record(z.string()).optional(),
+      env: z.record(z.string(), z.string()).optional(),
     },
     async ({ shell, cols, rows, cwd, name, env }) => {
       let session;
@@ -403,7 +402,7 @@ export function registerTools(server, manager) {
     {
       command: z.string(),
       cwd: z.string().optional(),
-      env: z.record(z.string()).optional(),
+      env: z.record(z.string(), z.string()).optional(),
       waitFor: z.string().optional().describe('Regex to wait for'),
       timeout: z.number().int().min(1000).max(600000).default(30000)
         .describe('waitFor timeout ms'),
@@ -610,13 +609,13 @@ export function registerTools(server, manager) {
       {
         list: z.boolean().default(false),
         tool: z.string().optional(),
-        args: z.record(z.any()).optional(),
+        args: z.record(z.string(), z.any()).optional(),
       },
       async (params, extra) => {
         if (params.list) {
           const catalog = {};
           for (const [n, def] of _extras) {
-            const s = zodToJsonSchema(z.object(def.schema));
+            const s = z.toJSONSchema(z.object(def.schema), { io: 'input' });
             catalog[n] = { description: def.description, parameters: s.properties || {}, required: s.required || [] };
           }
           return jsonContent(catalog);
@@ -634,7 +633,7 @@ export function registerTools(server, manager) {
           return await def.handler(validated, extra);
         } catch (err) {
           if (err instanceof z.ZodError) {
-            return errorContent(`Invalid args for ${params.tool}: ${err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ')}`);
+            return errorContent(`Invalid args for ${params.tool}: ${err.issues.map(e => `${e.path.join('.')}: ${e.message}`).join('; ')}`);
           }
           throw err;
         }
